@@ -67,10 +67,11 @@ pub struct EntityProperty {
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PageBeanComment {
-    pub is_last: bool,
+    pub is_last: Option<bool>,
     pub max_results: i32,
     pub start_at: i64,
     pub total: i64,
+    #[serde(alias = "comments")]
     pub values: Vec<Comment>,
 }
 

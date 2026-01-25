@@ -137,6 +137,8 @@ pub struct UpdateWorklogParams {
     pub adjust_estimate: Option<String>,
     /// The new remaining estimate value.
     pub new_estimate: Option<String>,
+    /// Whether to override the workflow editable flag.
+    pub override_editable_flag: Option<bool>,
     /// Expand to include additional information.
     pub expand: Option<String>,
 }

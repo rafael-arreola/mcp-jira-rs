@@ -3,3 +3,5 @@ docs
 .env*
 !.env.example
 .rules
+*.md
+!README.md

@@ -43,6 +43,7 @@ pub struct SearchProjectsParams {
     pub type_key: Option<String>,
     pub category_id: Option<i64>,
     pub action: Option<String>,
+    pub status: Option<String>,
     pub expand: Option<String>,
 }
 
@@ -158,14 +159,10 @@ pub struct Component {
 pub struct GetProjectComponentsParams {
     /// The ID or key of the project.
     pub project_id_or_key: String,
-    pub start_at: Option<i64>,
-    pub max_results: Option<i32>,
-    pub order_by: Option<String>,
-    pub query: Option<String>,
 }
 
 /// Paged response for components.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PageBeanComponentWithIssueCount {
     pub is_last: bool,
