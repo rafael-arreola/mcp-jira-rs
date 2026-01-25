@@ -1,0 +1,26 @@
+{
+  "name": "@rafael-arreola/jira-rs",
+  "version": "0.1.0",
+  "description": "Jira MCP Server CLI wrapper",
+  "bin": {
+    "jira-rs": "./bin.js"
+  },
+  "scripts": {
+    "postinstall": "node install.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rafael-arreola/mcp-jira-rs.git"
+  },
+  "author": "Carlos Rafael Arreola Hernández",
+  "license": "MIT",
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ]
+}

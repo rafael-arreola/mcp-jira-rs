@@ -25,7 +25,7 @@ cd mcp-jira
 cargo build --release
 ```
 
-The compiled binary will be available at `target/release/mcp-jira-rs`.
+The compiled binary will be available at `target/release/jira-rs`.
 
 ## Configuration
 
@@ -57,7 +57,8 @@ Add to your Claude Desktop config file:
 {
   "mcpServers": {
     "jira": {
-      "command": "/path/to/mcp-jira-rs",
+      "command": "npx",
+      "args": ["-y", "@rafael-arreola/jira-rs"],
       "env": {
         "JIRA_WORKSPACE": "your-workspace",
         "JIRA_USERNAME": "your-email@example.com",

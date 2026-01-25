@@ -808,7 +808,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "mcp-jira-rs"
+name = "jira-rs"
 version = "0.1.0"
 dependencies = [
  "anyhow",
