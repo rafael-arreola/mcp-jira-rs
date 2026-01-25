@@ -1,0 +1,54 @@
+[package]
+name = "mcp-jira-rs"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+authors = ["Carlos Rafael Arreola Hernández <rafael-arreola@outlook.com>"]
+repository = "https://github.com/rafael-arreola/mcp-jira-rs"
+
+[profile.release]
+lto = true
+opt-level = 3
+strip = true
+
+[profile.dev]
+opt-level = 0
+debug = true
+incremental = true
+
+[profile.dev.package."*"]
+opt-level = 3
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
+
+
+[dependencies]
+# Commons
+anyhow = "1"
+dotenvy = "0.15"
+tokio = { version = "1.49.0", features = ["full"] }
+
+# Logging
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3", features = [
+    "env-filter",
+    "std",
+    "fmt",
+] }
+
+# Server framework
+rmcp = { version = "0", features = ["server", "macros", "transport-io"] }
+
+# Serialization
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1"
+schemars = { version = "1", features = ["chrono04"] }
+chrono = { version = "0", features = ["serde"] }
+chrono-tz = "0.10.4"
+
+# HTTP client
+reqwest = { version = "0.13", features = ["json", "query", "multipart"] }
+urlencoding = "2.1"
