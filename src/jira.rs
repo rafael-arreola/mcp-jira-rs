@@ -8,6 +8,7 @@ use rmcp::{
 };
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug)]
 pub struct Jira {
     pub tool_router: ToolRouter<Jira>,
     client: reqwest::Client,
@@ -27,8 +28,16 @@ pub enum Method {
 #[tool_router]
 impl Jira {
     pub fn new(workspace: &str, username: &str, password: &str) -> Self {
+        let mut tool_router = Self::tool_router();
+        
+        // Sanitize schemas to remove "$schema" which confuses Gemini
+        for (_, route) in tool_router.map.iter_mut() {
+            let map = std::sync::Arc::make_mut(&mut route.attr.input_schema);
+            map.remove("$schema");
+        }
+
         Self {
-            tool_router: Self::tool_router(),
+            tool_router,
             client: reqwest::Client::new(),
             workspace: workspace.to_string(),
             username: username.to_string(),

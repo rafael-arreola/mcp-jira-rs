@@ -1,6 +1,5 @@
 mod families;
 mod jira;
-use jira::Jira;
 use rmcp::ServiceExt;
 
 #[tokio::main]
@@ -26,7 +25,7 @@ async fn main() -> anyhow::Result<()> {
     });
 
     let transport = (tokio::io::stdin(), tokio::io::stdout());
-    let jira = Jira::new(&workspace, &username, &token)
+    let jira = jira::Jira::new(&workspace, &username, &token)
         .serve(transport)
         .await?;
     jira.waiting().await?;
