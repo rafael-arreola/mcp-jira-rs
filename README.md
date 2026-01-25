@@ -71,7 +71,7 @@ Add to your Claude Desktop config file:
 
 ## Available Tools
 
-This MCP server provides 45 tools organized into the following categories:
+This MCP server provides 47 tools organized into the following categories:
 
 ### Issue Management
 
@@ -110,12 +110,14 @@ This MCP server provides 45 tools organized into the following categories:
 | `jira-issue_worklog_add`  | Add a worklog to an issue  | [Add Worklog](https://developer.atlassian.com/cloud/jira/platform/rest/v2/api-group-issue-worklogs/#api-rest-api-2-issue-issueidorkey-worklog-post)      |
 | `jira-issue_worklog_edit` | Update an existing worklog | [Update Worklog](https://developer.atlassian.com/cloud/jira/platform/rest/v2/api-group-issue-worklogs/#api-rest-api-2-issue-issueidorkey-worklog-id-put) |
 
-### Issue Links
+### Issue Links & Attachments
 
-| Tool Name                | Description                      | Jira API Reference                                                                                                                             |
-| ------------------------ | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `jira-issue_link_create` | Create a link between two issues | [Create Issue Link](https://developer.atlassian.com/cloud/jira/platform/rest/v2/api-group-issue-links/#api-rest-api-2-issuelink-post)          |
-| `jira-issue_link_delete` | Delete an issue link             | [Delete Issue Link](https://developer.atlassian.com/cloud/jira/platform/rest/v2/api-group-issue-links/#api-rest-api-2-issuelink-linkid-delete) |
+| Tool Name                      | Description                           | Jira API Reference                                                                                                                             |
+| ------------------------------ | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `jira-issue_link_create`       | Create a link between two issues      | [Create Issue Link](https://developer.atlassian.com/cloud/jira/platform/rest/v2/api-group-issue-links/#api-rest-api-2-issuelink-post)          |
+| `jira-issue_link_delete`       | Delete an issue link                  | [Delete Issue Link](https://developer.atlassian.com/cloud/jira/platform/rest/v2/api-group-issue-links/#api-rest-api-2-issuelink-linkid-delete) |
+| `jira-issue_attachment_get`    | Get attachments for an issue          | [Get Attachments](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-attachments/#api-rest-api-3-issue-issueidorkey-attachments-get) |
+| `jira-issue_attachment_delete` | Delete an attachment from an issue    | [Delete Attachment](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-attachments/#api-rest-api-3-attachment-id-delete) |
 
 ### Issue Metadata
 

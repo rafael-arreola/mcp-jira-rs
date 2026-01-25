@@ -42,7 +42,7 @@ impl Jira {
 
     #[rmcp::tool(
         name = "jira-issue_create",
-        description = "Creates an issue or a sub-task from a JSON representation and, optionally, apply a transition. The content of the issue or sub-task is defined using update and fields. The fields that can be set are determined using the 'Get create issue metadata' endpoint."
+        description = "Creates an issue or a sub-task. The 'fields' parameter must be a JSON object. IMPORTANT: Rich text fields like 'description' must be provided in Atlassian Document Format (ADF) JSON, not plain text."
     )]
     async fn create_issue(
         &self,
@@ -102,13 +102,21 @@ impl Jira {
 
     #[rmcp::tool(
         name = "jira-issue_edit",
-        description = "Edits an issue. Issue properties may be updated as part of the edit. Note that issue transition is not supported and is ignored here. To transition an issue, please use 'Transition issue'."
+        description = "Edits an issue. IMPORTANT: Rich text fields like 'description' in 'fields' or 'update' must be provided in Atlassian Document Format (ADF) JSON, not plain text."
     )]
     async fn edit_issue(
         &self,
         wrapper::Parameters(params): wrapper::Parameters<families::issue::EditIssueParams>,
     ) -> String {
         let url = format!("/rest/api/3/issue/{}", params.issue_id_or_key);
+        let mut query_params = Vec::new();
+        if let Some(notify) = params.notify_users {
+            query_params.push(("notifyUsers", notify.to_string()));
+        }
+        if let Some(override_editable) = params.override_editable_flag {
+            query_params.push(("overrideEditableFlag", override_editable.to_string()));
+        }
+
         #[derive(Serialize)]
         #[serde(rename_all = "camelCase")]
         struct Body<'a> {
@@ -123,7 +131,12 @@ impl Jira {
         };
 
         match self
-            .send_request::<serde_json::Value, _>(&url, Method::Put, None, Some(&body))
+            .send_request::<serde_json::Value, _>(
+                &url,
+                Method::Put,
+                Some(&query_params),
+                Some(&body),
+            )
             .await
         {
             Ok(_) => "Issue updated successfully".to_string(),
@@ -192,9 +205,20 @@ impl Jira {
     )]
     async fn get_transitions(
         &self,
-        wrapper::Parameters(params): wrapper::Parameters<families::issue::GetIssueParams>,
+        wrapper::Parameters(params): wrapper::Parameters<families::issue::GetTransitionsParams>,
     ) -> String {
         let url = format!("/rest/api/3/issue/{}/transitions", params.issue_id_or_key);
+        let mut query_params = Vec::new();
+        if let Some(transition_id) = &params.transition_id {
+            query_params.push(("transitionId", transition_id.clone()));
+        }
+        if let Some(skip) = params.skip_remote_only_condition {
+            query_params.push(("skipRemoteOnlyCondition", skip.to_string()));
+        }
+        if let Some(expand) = &params.expand {
+            query_params.push(("expand", expand.clone()));
+        }
+
         #[derive(Serialize, Deserialize)]
         #[serde(rename_all = "camelCase")]
         struct TransitionResponse {
@@ -202,7 +226,12 @@ impl Jira {
         }
 
         match self
-            .send_request::<TransitionResponse, _>(&url, Method::Get, None, None::<&()>)
+            .send_request::<TransitionResponse, _>(
+                &url,
+                Method::Get,
+                Some(&query_params),
+                None::<&()>,
+            )
             .await
         {
             Ok(res) => serde_json::to_string(&res).unwrap_or_default(),
@@ -300,17 +329,42 @@ impl Jira {
             query_params.push(("expand", expand.clone()));
         }
 
+        // Helper to convert plain string to ADF
+        fn text_to_adf(text: &str) -> families::JsonValue {
+            families::JsonValue(serde_json::json!({
+                "version": 1,
+                "type": "doc",
+                "content": [
+                    {
+                        "type": "paragraph",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": text
+                            }
+                        ]
+                    }
+                ]
+            }))
+        }
+
+        let final_body = if params.body.is_string() {
+            text_to_adf(params.body.as_str().unwrap_or_default())
+        } else {
+            params.body.clone()
+        };
+
         #[derive(Serialize)]
         #[serde(rename_all = "camelCase")]
         struct Body<'a> {
-            body: &'a families::JsonValue,
+            body: families::JsonValue,
             #[serde(skip_serializing_if = "Option::is_none")]
             visibility: Option<&'a families::issue_comment::Visibility>,
             #[serde(skip_serializing_if = "Option::is_none")]
             properties: Option<&'a Vec<families::issue_comment::EntityProperty>>,
         }
         let body = Body {
-            body: &params.body,
+            body: final_body,
             visibility: params.visibility.as_ref(),
             properties: params.properties.as_ref(),
         };
@@ -618,6 +672,9 @@ impl Jira {
         if let Some(expand) = &params.expand {
             query_params.push(("expand", expand.clone()));
         }
+        if let Some(override_editable) = params.override_editable_flag {
+            query_params.push(("overrideEditableFlag", override_editable.to_string()));
+        }
 
         #[derive(Serialize)]
         #[serde(rename_all = "camelCase")]
@@ -698,6 +755,55 @@ impl Jira {
             .await
         {
             Ok(_) => "Issue link deleted successfully".to_string(),
+            Err(e) => e.to_string(),
+        }
+    }
+
+    // =========================================================================
+    // BEGIN: Attachments
+    // =========================================================================
+
+    #[rmcp::tool(
+        name = "jira-issue_attachment_get",
+        description = "Returns the attachments for an issue. Browse projects permission is required for the project containing the issue."
+    )]
+    async fn get_attachments(
+        &self,
+        wrapper::Parameters(params): wrapper::Parameters<
+            families::issue_attachment::GetAttachmentsParams,
+        >,
+    ) -> String {
+        let url = format!("/rest/api/3/issue/{}/attachments", params.issue_id_or_key);
+        match self
+            .send_request::<Vec<families::issue_attachment::Attachment>, _>(
+                &url,
+                Method::Get,
+                None,
+                None::<&()>,
+            )
+            .await
+        {
+            Ok(res) => serde_json::to_string(&res).unwrap_or_default(),
+            Err(e) => e.to_string(),
+        }
+    }
+
+    #[rmcp::tool(
+        name = "jira-issue_attachment_delete",
+        description = "Deletes an attachment. Delete own attachments or Delete all attachments project permission is required."
+    )]
+    async fn delete_attachment(
+        &self,
+        wrapper::Parameters(params): wrapper::Parameters<
+            families::issue_attachment::DeleteAttachmentParams,
+        >,
+    ) -> String {
+        let url = format!("/rest/api/3/attachment/{}", params.attachment_id);
+        match self
+            .send_request::<serde_json::Value, _>(&url, Method::Delete, None, None::<&()>)
+            .await
+        {
+            Ok(_) => "Attachment deleted successfully".to_string(),
             Err(e) => e.to_string(),
         }
     }
@@ -969,8 +1075,27 @@ impl Jira {
         if let Some(type_key) = &params.type_key {
             query_params.push(("typeKey", type_key.clone()));
         }
+        if let Some(action) = &params.action {
+            query_params.push(("action", action.clone()));
+        }
+        if let Some(status) = &params.status {
+            query_params.push(("status", status.clone()));
+        }
         if let Some(expand) = &params.expand {
             query_params.push(("expand", expand.clone()));
+        }
+        if let Some(category_id) = params.category_id {
+            query_params.push(("categoryId", category_id.to_string()));
+        }
+        if let Some(ids) = &params.id {
+            for id in ids {
+                query_params.push(("id", id.to_string()));
+            }
+        }
+        if let Some(keys) = &params.keys {
+            for key in keys {
+                query_params.push(("keys", key.clone()));
+            }
         }
 
         match self
@@ -1052,7 +1177,7 @@ impl Jira {
 
     #[rmcp::tool(
         name = "jira-project_get_components",
-        description = "Returns a paginated list of all components in a project. Browse Projects project permission is required."
+        description = "Returns all components in a project. Browse Projects project permission is required."
     )]
     async fn get_project_components(
         &self,
@@ -1061,26 +1186,13 @@ impl Jira {
         >,
     ) -> String {
         let url = format!("/rest/api/3/project/{}/component", params.project_id_or_key);
-        let mut query_params = Vec::new();
-        if let Some(start_at) = params.start_at {
-            query_params.push(("startAt", start_at.to_string()));
-        }
-        if let Some(max_results) = params.max_results {
-            query_params.push(("maxResults", max_results.to_string()));
-        }
-        if let Some(order_by) = &params.order_by {
-            query_params.push(("orderBy", order_by.clone()));
-        }
-        if let Some(query) = &params.query {
-            query_params.push(("query", query.clone()));
-        }
-
+        // We revert to using PageBeanComponentWithIssueCount because the API returned a map, not a sequence.
         match self
-            .send_request::<families::project::PageBeanComponentWithIssueCount, _>(
+            .send_request::<families::project::PageBeanComponentWithIssueCount, serde_json::Value>(
                 &url,
                 Method::Get,
-                Some(&query_params),
-                None::<&()>,
+                None,
+                None,
             )
             .await
         {
@@ -1419,27 +1531,59 @@ impl Jira {
         wrapper::Parameters(params): wrapper::Parameters<families::agile::UpdateSprintParams>,
     ) -> String {
         let url = format!("/rest/agile/1.0/sprint/{}", params.sprint_id);
+
+        let mut name = params.name.clone();
+        let mut state = params.state.clone();
+        let mut start_date = params.start_date.clone();
+        let mut end_date = params.end_date.clone();
+        let mut goal = params.goal.clone();
+
+        // If any required field for validation (like name or state) is missing, fetch current sprint data
+        if name.is_none() || state.is_none() || start_date.is_none() || end_date.is_none() {
+            if let Ok(sprint) = self
+                .send_request::<families::agile::Sprint, _>(&url, Method::Get, None, None::<&()>)
+                .await
+            {
+                if name.is_none() {
+                    name = Some(sprint.name);
+                }
+                if state.is_none() {
+                    state = Some(sprint.state);
+                }
+                if start_date.is_none() {
+                    start_date = sprint.start_date;
+                }
+                if end_date.is_none() {
+                    end_date = sprint.end_date;
+                }
+                // Goal is optional in update, but good to preserve if we fetched it, though params.goal takes precedence if set.
+                if goal.is_none() {
+                    goal = sprint.goal;
+                }
+            }
+        }
+
         // We need to exclude sprint_id from the body
         #[derive(Serialize)]
         #[serde(rename_all = "camelCase")]
-        struct Body<'a> {
+        struct Body {
             #[serde(skip_serializing_if = "Option::is_none")]
-            name: Option<&'a String>,
+            name: Option<String>,
             #[serde(skip_serializing_if = "Option::is_none")]
-            start_date: Option<&'a String>,
+            start_date: Option<String>,
             #[serde(skip_serializing_if = "Option::is_none")]
-            end_date: Option<&'a String>,
+            end_date: Option<String>,
             #[serde(skip_serializing_if = "Option::is_none")]
-            state: Option<&'a String>,
+            state: Option<String>,
             #[serde(skip_serializing_if = "Option::is_none")]
-            goal: Option<&'a String>,
+            goal: Option<String>,
         }
         let body = Body {
-            name: params.name.as_ref(),
-            start_date: params.start_date.as_ref(),
-            end_date: params.end_date.as_ref(),
-            state: params.state.as_ref(),
-            goal: params.goal.as_ref(),
+            name,
+            start_date,
+            end_date,
+            state,
+            goal,
         };
 
         match self

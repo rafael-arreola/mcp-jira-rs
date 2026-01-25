@@ -1,5 +1,6 @@
 pub mod agile;
 pub mod issue;
+pub mod issue_attachment;
 pub mod issue_comment;
 pub mod issue_custom_field;
 pub mod issue_field;

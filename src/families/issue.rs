@@ -50,6 +50,20 @@ pub struct GetIssueParams {
     pub update_history: Option<bool>,
 }
 
+/// Parameters for getting issue transitions.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GetTransitionsParams {
+    /// The ID or key of the issue.
+    pub issue_id_or_key: String,
+    /// The ID of the transition.
+    pub transition_id: Option<String>,
+    /// Whether to skip the remote only condition.
+    pub skip_remote_only_condition: Option<bool>,
+    /// Whether to expand the fields.
+    pub expand: Option<String>,
+}
+
 /// Parameters for editing an issue.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -60,6 +74,10 @@ pub struct EditIssueParams {
     pub fields: Option<JsonValue>,
     /// The updates to perform.
     pub update: Option<JsonValue>,
+    /// Whether to notify users of the update.
+    pub notify_users: Option<bool>,
+    /// Whether to override the workflow editable flag.
+    pub override_editable_flag: Option<bool>,
 }
 
 /// Parameters for deleting an issue.
@@ -105,6 +123,20 @@ pub struct IssueTransition {
     pub id: String,
     /// The name of the transition.
     pub name: Option<String>,
+    /// The target status of the transition.
+    pub to: Option<TransitionStatus>,
+    /// The fields that can be updated during the transition.
+    pub fields: Option<HashMap<String, JsonValue>>,
+}
+
+/// Details of a transition status.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[schemars(inline)]
+pub struct TransitionStatus {
+    pub id: Option<String>,
+    pub name: Option<String>,
+    pub status_category: Option<JsonValue>,
 }
 
 impl<'de> serde::Deserialize<'de> for IssueTransition {
@@ -117,6 +149,8 @@ impl<'de> serde::Deserialize<'de> for IssueTransition {
         struct RawTransition {
             id: String,
             name: Option<String>,
+            to: Option<TransitionStatus>,
+            fields: Option<HashMap<String, JsonValue>>,
         }
 
         let v = serde_json::Value::deserialize(deserializer)?;
@@ -127,6 +161,8 @@ impl<'de> serde::Deserialize<'de> for IssueTransition {
                 Ok(IssueTransition {
                     id: raw.id,
                     name: raw.name,
+                    to: raw.to,
+                    fields: raw.fields,
                 })
             }
             _ => {
@@ -135,6 +171,8 @@ impl<'de> serde::Deserialize<'de> for IssueTransition {
                 Ok(IssueTransition {
                     id: raw.id,
                     name: raw.name,
+                    to: raw.to,
+                    fields: raw.fields,
                 })
             }
         }
