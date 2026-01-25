@@ -29,9 +29,10 @@ function getTarget() {
 }
 
 const target = getTarget();
-const ext = process.platform === "win32" ? "zip" : "tar.gz";
+const ext = process.platform === "win32" ? "zip" : "tar.xz";
 const filename = `${BIN_NAME}-${target}.${ext}`;
 const url = `https://github.com/${REPO}/releases/download/${VERSION}/${filename}`;
+
 const binDir = path.join(__dirname, "bin");
 const binFile = process.platform === "win32" ? `${BIN_NAME}.exe` : BIN_NAME;
 const finalBinPath = path.join(binDir, binFile);
