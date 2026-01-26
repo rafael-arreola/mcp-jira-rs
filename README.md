@@ -76,10 +76,10 @@ This MCP server provides **19 consolidated tools** (reduced from 50) for maximum
 
 ### 🎯 Issue Management (3 tools)
 
-| Tool Name            | Description                                                                                  |
-| -------------------- | -------------------------------------------------------------------------------------------- |
-| `issue_mutate`       | **Unified CRUD**: Create, update, delete, assign, transition issues. Supports bulk create.   |
-| `issue_query`        | **Query & Search**: Get single issue by ID/key or search with JQL. Includes transitions.     |
+| Tool Name            | Description                                                                                        |
+| -------------------- | -------------------------------------------------------------------------------------------------- |
+| `issue_mutate`       | **Unified CRUD**: Create, update, delete, assign, transition issues. Supports bulk create.         |
+| `issue_query`        | **Query & Search**: Get single issue by ID/key or search with JQL. Includes transitions.           |
 | `issue_get_metadata` | **Field Discovery**: Get available fields and requirements for creating issues (Typed CreateMeta). |
 
 ### 📝 Content & Social (3 tools)
@@ -92,12 +92,12 @@ This MCP server provides **19 consolidated tools** (reduced from 50) for maximum
 
 ### 🏃 Agile Operations (4 tools)
 
-| Tool Name              | Description                                                                         |
-| ---------------------- | ----------------------------------------------------------------------------------- |
-| `agile_query`          | **Boards & Sprints**: Query boards, sprints, issues, and backlog with filters.      |
-| `agile_sprint_manage`  | **Sprint Lifecycle**: Create, update, delete, start, close sprints.                 |
-| `agile_move_issues`    | **Issue Movement**: Move issues to sprint or backlog (up to 50 per operation).      |
-| `agile_sprint_analyze` | **✨ NEW**: Analyze sprint health. **Smartly detects "Story Points"** field.        |
+| Tool Name              | Description                                                                    |
+| ---------------------- | ------------------------------------------------------------------------------ |
+| `agile_query`          | **Boards & Sprints**: Query boards, sprints, issues, and backlog with filters. |
+| `agile_sprint_manage`  | **Sprint Lifecycle**: Create, update, delete, start, close sprints.            |
+| `agile_move_issues`    | **Issue Movement**: Move issues to sprint or backlog (up to 50 per operation). |
+| `agile_sprint_analyze` | **✨ NEW**: Analyze sprint health. **Smartly detects "Story Points"** field.   |
 
 ### 🏷️ Metadata & Discovery (2 tools)
 
@@ -127,7 +127,6 @@ This MCP server provides **19 consolidated tools** (reduced from 50) for maximum
 | Tool Name     | Description                                                                              |
 | ------------- | ---------------------------------------------------------------------------------------- |
 | `text_to_adf` | **✨ NEW**: Convert plain text to Atlassian Document Format (paragraph, headings, code). |
-
 
 ## Usage Examples
 
