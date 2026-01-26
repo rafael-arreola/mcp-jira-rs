@@ -37,7 +37,7 @@ This MCP server requires three environment variables to connect to your Jira ins
 ```bash
 JIRA_WORKSPACE="your-workspace"     # Your Jira workspace subdomain (e.g., "mycompany" for mycompany.atlassian.net)
 JIRA_USERNAME="your-email@example.com"  # Your Jira account email
-JIRA_PASSWORD="your-api-token"      # Your Jira API token (not your account password)
+JIRA_TOKEN="your-api-token"      # Your Jira API token (not your account password)
 ```
 
 ### Getting Your Jira API Token
@@ -45,7 +45,7 @@ JIRA_PASSWORD="your-api-token"      # Your Jira API token (not your account pass
 1. Go to [Atlassian Account Settings](https://id.atlassian.com/manage-profile/security/api-tokens)
 2. Click "Create API token"
 3. Give it a label (e.g., "MCP Server")
-4. Copy the generated token and use it as `JIRA_PASSWORD`
+4. Copy the generated token and use it as `JIRA_TOKEN`
 
 ### Claude Desktop Configuration
 
@@ -63,7 +63,7 @@ Add to your Claude Desktop config file:
       "env": {
         "JIRA_WORKSPACE": "your-workspace",
         "JIRA_USERNAME": "your-email@example.com",
-        "JIRA_PASSWORD": "your-api-token"
+        "JIRA_TOKEN": "your-api-token"
       }
     }
   }
