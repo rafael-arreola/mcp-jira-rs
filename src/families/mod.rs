@@ -1,14 +1,10 @@
 pub mod agile;
+pub mod helpers;
 pub mod issue;
-pub mod issue_attachment;
-pub mod issue_comment;
-pub mod issue_custom_field;
-pub mod issue_field;
-pub mod issue_link;
-pub mod issue_metadata;
-pub mod issue_social;
-pub mod issue_worklog;
+pub mod issue_content;
+pub mod issue_relations;
 pub mod jql;
+pub mod metadata;
 pub mod project;
 pub mod user;
 

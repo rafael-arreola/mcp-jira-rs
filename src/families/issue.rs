@@ -3,224 +3,172 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-// --- Issues ---
+// ============================================================================
+// PUBLIC API - Issue Mutations (Exposed to MCP)
+// ============================================================================
 
-/// Details of an issue.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct Issue {
-    /// The ID of the issue.
-    pub id: String,
-    /// The key of the issue.
-    pub key: String,
-    /// The URL of the issue details.
-    #[serde(rename = "self")]
-    pub self_link: String,
-    /// Expand to include additional information.
-    pub expand: Option<String>,
-    /// The fields of the issue.
-    pub fields: HashMap<String, serde_json::Value>,
-    /// The rendered fields of the issue.
-    pub rendered_fields: Option<HashMap<String, String>>,
+pub struct IssueMutateParams {
+    /// Operation type: "create", "update", "delete", "assign", "transition"
+    pub operation: String,
+
+    /// Issue ID or key (required for update/delete/assign/transition, omit for create)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub issue_id_or_key: Option<String>,
+
+    /// Operation payload (structure varies by operation)
+    pub data: JsonValue,
+
+    /// Enable bulk mode (provide array of data objects)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bulk: Option<bool>,
 }
 
-/// Parameters for creating an issue.
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct CreateIssueParams {
-    /// The fields of the issue.
-    pub fields: JsonValue,
-    /// Additional updates to perform on the issue.
-    pub update: Option<JsonValue>,
-}
+// ============================================================================
+// PUBLIC API - Issue Queries (Exposed to MCP)
+// ============================================================================
 
-/// Parameters for getting an issue.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct GetIssueParams {
-    /// The ID or key of the issue.
-    pub issue_id_or_key: String,
-    /// A list of fields to return for the issue.
+pub struct IssueQueryParams {
+    /// Issue ID or key to fetch (omit to search with JQL)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub issue_id_or_key: Option<String>,
+
+    /// JQL query string (used when issueIdOrKey is omitted)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub jql: Option<String>,
+
+    /// Fields to return for each issue
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub fields: Option<Vec<String>>,
-    /// Whether to expand the fields.
+
+    /// Expand options (comma-separated)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub expand: Option<String>,
-    /// Whether to return the issue properties.
+
+    /// Include available transitions for the issue
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include_transitions: Option<bool>,
+
+    /// Maximum results for search (default 50, max 100)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_results: Option<i32>,
+
+    /// Starting index for pagination
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_at: Option<i64>,
+
+    /// Properties to return
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub properties: Option<Vec<String>>,
-    /// Whether to update the issue history.
-    pub update_history: Option<bool>,
 }
 
-/// Parameters for getting issue transitions.
+// ============================================================================
+// PUBLIC API - Issue Metadata Discovery
+// ============================================================================
+
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct GetTransitionsParams {
-    /// The ID or key of the issue.
-    pub issue_id_or_key: String,
-    /// The ID of the transition.
-    pub transition_id: Option<String>,
-    /// Whether to skip the remote only condition.
-    pub skip_remote_only_condition: Option<bool>,
-    /// Whether to expand the fields.
+pub struct IssueMetadataParams {
+    /// Project key or ID
+    pub project_key: String,
+
+    /// Issue type name to get specific metadata (omit for all types)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub issue_type_name: Option<String>,
+
+    /// Expand options
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub expand: Option<String>,
 }
 
-/// Parameters for editing an issue.
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+// ============================================================================
+// INTERNAL DTOs - Create Operation
+// ============================================================================
+
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct EditIssueParams {
-    /// The ID or key of the issue.
-    pub issue_id_or_key: String,
-    /// The fields to update.
-    pub fields: Option<JsonValue>,
-    /// The updates to perform.
+pub(crate) struct CreateIssueData {
+    pub fields: JsonValue,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub update: Option<JsonValue>,
-    /// Whether to notify users of the update.
+}
+
+// ============================================================================
+// INTERNAL DTOs - Update Operation
+// ============================================================================
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct UpdateIssueData {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fields: Option<JsonValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub update: Option<JsonValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub notify_users: Option<bool>,
-    /// Whether to override the workflow editable flag.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub override_editable_flag: Option<bool>,
 }
 
-/// Parameters for deleting an issue.
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+// ============================================================================
+// INTERNAL DTOs - Delete Operation
+// ============================================================================
+
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DeleteIssueParams {
-    /// The ID or key of the issue.
-    pub issue_id_or_key: String,
-    /// Whether to delete subtasks.
+pub(crate) struct DeleteIssueData {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub delete_subtasks: Option<String>,
 }
 
-/// Parameters for assigning an issue.
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+// ============================================================================
+// INTERNAL DTOs - Assign Operation
+// ============================================================================
+
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AssignIssueParams {
-    /// The ID or key of the issue.
-    pub issue_id_or_key: String,
-    /// The account ID of the user to assign the issue to.
+pub(crate) struct AssignIssueData {
     pub account_id: String,
 }
 
-/// Parameters for transitioning an issue.
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+// ============================================================================
+// INTERNAL DTOs - Transition Operation
+// ============================================================================
+
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TransitionIssueParams {
-    /// The ID or key of the issue.
-    pub issue_id_or_key: String,
-    /// The transition to perform.
-    pub transition: IssueTransition,
-    /// The fields to update.
+pub(crate) struct TransitionIssueData {
+    pub transition: TransitionRef,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub fields: Option<JsonValue>,
-    /// The updates to perform.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub update: Option<JsonValue>,
 }
 
-/// Details of an issue transition.
-#[derive(Debug, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-#[schemars(inline)]
-pub struct IssueTransition {
-    /// The ID of the transition.
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct TransitionRef {
     pub id: String,
-    /// The name of the transition.
-    pub name: Option<String>,
-    /// The target status of the transition.
-    pub to: Option<TransitionStatus>,
-    /// The fields that can be updated during the transition.
-    pub fields: Option<HashMap<String, JsonValue>>,
 }
 
-/// Details of a transition status.
+// ============================================================================
+// RESPONSE TYPES
+// ============================================================================
+
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-#[schemars(inline)]
-pub struct TransitionStatus {
-    pub id: Option<String>,
-    pub name: Option<String>,
-    pub status_category: Option<JsonValue>,
-}
-
-impl<'de> serde::Deserialize<'de> for IssueTransition {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase")]
-        struct RawTransition {
-            id: String,
-            name: Option<String>,
-            to: Option<TransitionStatus>,
-            fields: Option<HashMap<String, JsonValue>>,
-        }
-
-        let v = serde_json::Value::deserialize(deserializer)?;
-        match v {
-            serde_json::Value::String(s) => {
-                let raw: RawTransition =
-                    serde_json::from_str(&s).map_err(serde::de::Error::custom)?;
-                Ok(IssueTransition {
-                    id: raw.id,
-                    name: raw.name,
-                    to: raw.to,
-                    fields: raw.fields,
-                })
-            }
-            _ => {
-                let raw: RawTransition =
-                    serde_json::from_value(v).map_err(serde::de::Error::custom)?;
-                Ok(IssueTransition {
-                    id: raw.id,
-                    name: raw.name,
-                    to: raw.to,
-                    fields: raw.fields,
-                })
-            }
-        }
-    }
-}
-
-// --- Search (JQL) ---
-
-/// Parameters for searching issues using JQL (POST - Enhanced Search).
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct SearchIssuesPostParams {
-    /// The JQL query.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub jql: Option<String>,
-    /// The token for the next page of results.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub next_page_token: Option<String>,
-    /// The maximum number of items to return per page.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_results: Option<i32>,
-    /// A list of fields to return for each issue.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub fields: Option<Vec<String>>,
-    /// Whether to expand the fields (comma-separated string).
+pub struct Issue {
+    pub id: String,
+    pub key: String,
+    #[serde(rename = "self")]
+    pub self_link: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expand: Option<String>,
-    /// Whether to return fields by keys.
+    pub fields: HashMap<String, serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub fields_by_keys: Option<bool>,
-    /// A list of issue properties to return for each issue.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub properties: Option<Vec<String>>,
-    /// A list of issue IDs to reconcile.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reconcile_issues: Option<Vec<i64>>,
-}
-
-/// Results of an enhanced search.
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SearchResults {
-    /// Whether this is the last page of results.
-    pub is_last: bool,
-    /// The list of issues found.
-    pub issues: Vec<Issue>,
-    /// The token for the next page of results.
-    pub next_page_token: Option<String>,
+    pub rendered_fields: Option<HashMap<String, String>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -230,4 +178,48 @@ pub struct CreatedIssue {
     pub key: String,
     #[serde(rename = "self")]
     pub self_link: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BulkCreatedIssues {
+    pub issues: Vec<CreatedIssue>,
+    pub errors: Vec<JsonValue>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchResults {
+    pub start_at: i64,
+    pub max_results: i32,
+    pub total: i64,
+    pub issues: Vec<Issue>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Transition {
+    pub id: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to: Option<TransitionStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fields: Option<HashMap<String, JsonValue>>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransitionStatus {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status_category: Option<JsonValue>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransitionsResponse {
+    pub transitions: Vec<Transition>,
 }
