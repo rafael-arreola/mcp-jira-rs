@@ -1,35 +1,21 @@
 pub mod agile;
+pub mod helpers;
 pub mod issue;
-pub mod issue_attachment;
-pub mod issue_comment;
-pub mod issue_custom_field;
-pub mod issue_field;
-pub mod issue_link;
-pub mod issue_metadata;
-pub mod issue_social;
-pub mod issue_worklog;
+pub mod issue_content;
+pub mod issue_relations;
 pub mod jql;
+pub mod metadata;
 pub mod project;
 pub mod user;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::borrow::Cow;
 
-/// A safe wrapper for JSON values that produces a compatible schema (String).
-#[derive(Debug, Serialize, Clone)]
+/// A safe wrapper for JSON values that produces a compatible schema.
+#[derive(Debug, Serialize, Clone, JsonSchema)]
 #[serde(transparent)]
+#[schemars(inline)]
 pub struct JsonValue(pub serde_json::Value);
-
-impl JsonSchema for JsonValue {
-    fn schema_name() -> Cow<'static, str> {
-        "JsonValue".into()
-    }
-
-    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        String::json_schema(generator)
-    }
-}
 
 impl<'de> Deserialize<'de> for JsonValue {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>

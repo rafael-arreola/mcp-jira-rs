@@ -1,25 +1,189 @@
+use super::JsonValue;
 use crate::families::issue::Issue;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-// --- Boards ---
+// ============================================================================
+// PUBLIC API - Agile Queries (Exposed to MCP)
+// ============================================================================
 
-/// Details of a board.
+#[derive(Debug, Serialize, Deserialize, JsonSchema, Clone)]
+#[serde(rename_all = "camelCase")]
+pub enum AgileQueryResource {
+    Board,
+    Sprint,
+    Backlog,
+    Issues,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct AgileQueryParams {
+    /// Resource type: "board", "sprint", "backlog", "issues"
+    pub resource: AgileQueryResource,
+
+    /// Board ID (required for most operations)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub board_id: Option<i64>,
+
+    /// Sprint ID (required when resource is "sprint")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sprint_id: Option<i64>,
+
+    /// Filters as JSON (varies by resource type)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filters: Option<JsonValue>,
+
+    /// Starting index for pagination
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_at: Option<i64>,
+
+    /// Maximum results per page
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_results: Option<i32>,
+}
+
+// ============================================================================
+// PUBLIC API - Sprint Management (Exposed to MCP)
+// ============================================================================
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AgileSprintManageParams {
+    /// Operation: "create", "update", "delete", "start", "close"
+    pub operation: String,
+
+    /// Sprint ID (required for update/delete/start/close, omit for create)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sprint_id: Option<i64>,
+
+    /// Board ID (required for create, optional for others)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub board_id: Option<i64>,
+
+    /// Operation payload (structure varies by operation)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<JsonValue>,
+}
+
+// ============================================================================
+// PUBLIC API - Move Issues (Exposed to MCP)
+// ============================================================================
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AgileMoveIssuesParams {
+    /// Destination: "sprint" or "backlog"
+    pub destination: String,
+
+    /// Destination sprint ID (required when destination is "sprint", omit for backlog)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub destination_id: Option<i64>,
+
+    /// Issue keys or IDs to move
+    pub issues: Vec<String>,
+}
+
+// ============================================================================
+// PUBLIC API - Sprint Analysis (Exposed to MCP)
+// ============================================================================
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AgileSprintAnalyzeParams {
+    /// Sprint ID to analyze (omit to analyze active sprint)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sprint_id: Option<i64>,
+
+    /// Board ID (required if sprint_id is omitted)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub board_id: Option<i64>,
+
+    /// Metrics to include: "velocity", "unestimated", "blocked", "capacity", "completion"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metrics: Option<Vec<String>>,
+}
+
+// ============================================================================
+// INTERNAL DTOs - Board Query Filters
+// ============================================================================
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct BoardFilters {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub r#type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_key_or_id: Option<String>,
+}
+
+// ============================================================================
+// INTERNAL DTOs - Sprint Query Filters
+// ============================================================================
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SprintFilters {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
+}
+
+// ============================================================================
+// INTERNAL DTOs - Issues Query Filters
+// ============================================================================
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct IssuesFilters {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub jql: Option<String>,
+    #[allow(dead_code)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub validate_query: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fields: Option<Vec<String>>,
+    #[allow(dead_code)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expand: Option<String>,
+}
+
+// ============================================================================
+// INTERNAL DTOs - Sprint Create/Update Data
+// ============================================================================
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SprintData {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin_board_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_date: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_date: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub goal: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
+}
+
+// ============================================================================
+// RESPONSE TYPES - Boards
+// ============================================================================
+
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Board {
-    /// The ID of the board.
     pub id: i64,
-    /// The URL of the board details.
     #[serde(rename = "self")]
     pub self_link: String,
-    /// The name of the board.
     pub name: String,
-    /// The type of the board (e.g. "scrum", "kanban").
     pub r#type: String,
 }
 
-/// Paged response for boards.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PageBeanBoard {
@@ -30,122 +194,30 @@ pub struct PageBeanBoard {
     pub values: Vec<Board>,
 }
 
-/// Parameters for getting boards.
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct GetBoardsParams {
-    /// The starting index of the returned boards.
-    pub start_at: Option<i64>,
-    /// The maximum number of boards to return per page.
-    pub max_results: Option<i32>,
-    /// Filters results to boards of the specified type.
-    pub r#type: Option<String>,
-    /// Filters results to boards that match the specified name.
-    pub name: Option<String>,
-    /// Filters results to boards that are relevant to a project.
-    pub project_key_or_id: Option<String>,
-}
+// ============================================================================
+// RESPONSE TYPES - Sprints
+// ============================================================================
 
-/// Parameters for getting a specific board.
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct GetBoardParams {
-    /// The ID of the board.
-    pub board_id: i64,
-}
-
-// --- Sprints ---
-
-/// Details of a sprint.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Sprint {
-    /// The ID of the sprint.
     pub id: i64,
-    /// The URL of the sprint details.
     #[serde(rename = "self")]
     pub self_link: String,
-    /// The state of the sprint.
     pub state: String,
-    /// The name of the sprint.
     pub name: String,
-    /// The start date of the sprint.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub start_date: Option<String>,
-    /// The end date of the sprint.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub end_date: Option<String>,
-    /// The completion date of the sprint.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub complete_date: Option<String>,
-    /// The ID of the board the sprint belongs to.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub origin_board_id: Option<i64>,
-    /// The goal of the sprint.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub goal: Option<String>,
 }
 
-/// Parameters for getting all sprints for a board.
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct GetBoardSprintsParams {
-    /// The ID of the board.
-    pub board_id: i64,
-    /// The starting index of the returned sprints.
-    pub start_at: Option<i64>,
-    /// The maximum number of sprints to return per page.
-    pub max_results: Option<i32>,
-    /// Filters results to sprints in specified states (comma-separated).
-    pub state: Option<String>,
-}
-
-/// Parameters for creating a sprint.
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct CreateSprintParams {
-    /// The name of the sprint.
-    pub name: String,
-    /// The ID of the board the sprint belongs to.
-    pub origin_board_id: i64,
-    /// The start date of the sprint (ISO 8601).
-    pub start_date: Option<String>,
-    /// The end date of the sprint (ISO 8601).
-    pub end_date: Option<String>,
-    /// The goal of the sprint.
-    pub goal: Option<String>,
-}
-
-/// Parameters for getting a specific sprint.
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct GetSprintParams {
-    /// The ID of the sprint.
-    pub sprint_id: i64,
-}
-
-/// Parameters for updating a sprint (including starting/closing).
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct UpdateSprintParams {
-    /// The ID of the sprint.
-    pub sprint_id: i64,
-    /// The name of the sprint.
-    pub name: Option<String>,
-    /// The start date of the sprint (ISO 8601).
-    pub start_date: Option<String>,
-    /// The end date of the sprint (ISO 8601).
-    pub end_date: Option<String>,
-    /// The state of the sprint (active, closed).
-    pub state: Option<String>,
-    /// The goal of the sprint.
-    pub goal: Option<String>,
-}
-
-/// Parameters for deleting a sprint.
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct DeleteSprintParams {
-    /// The ID of the sprint.
-    pub sprint_id: i64,
-}
-
-/// Paged response for sprints.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PageBeanSprint {
@@ -156,12 +228,14 @@ pub struct PageBeanSprint {
     pub values: Vec<Sprint>,
 }
 
-// --- Backlog & Issues ---
+// ============================================================================
+// RESPONSE TYPES - Issues
+// ============================================================================
 
-/// Paged response for issues (Agile).
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PageBeanIssue {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub expand: Option<String>,
     pub start_at: i64,
     pub max_results: i32,
@@ -169,61 +243,26 @@ pub struct PageBeanIssue {
     pub issues: Vec<Issue>,
 }
 
-/// Parameters for getting issues on a board (backlog or otherwise).
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct GetBoardIssuesParams {
-    /// The ID of the board.
-    pub board_id: i64,
-    /// The starting index of the returned issues.
-    pub start_at: Option<i64>,
-    /// The maximum number of issues to return per page.
-    pub max_results: Option<i32>,
-    /// JQL query to filter issues.
-    pub jql: Option<String>,
-    /// Whether to validate the JQL query.
-    pub validate_query: Option<bool>,
-    /// The fields to return for each issue.
-    pub fields: Option<Vec<String>>,
-    /// Expansion options.
-    pub expand: Option<String>,
-}
+// ============================================================================
+// RESPONSE TYPES - Sprint Analysis
+// ============================================================================
 
-/// Parameters for getting issues in the backlog (Agile API sometimes separates this, or uses GetBoardIssues).
-/// Jira Cloud Agile API has `GET /rest/agile/1.0/board/{boardId}/backlog`.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct GetBoardBacklogParams {
-    /// The ID of the board.
-    pub board_id: i64,
-    /// The starting index of the returned issues.
-    pub start_at: Option<i64>,
-    /// The maximum number of issues to return per page.
-    pub max_results: Option<i32>,
-    /// JQL query to filter issues.
-    pub jql: Option<String>,
-    /// Whether to validate the JQL query.
-    pub validate_query: Option<bool>,
-    /// The fields to return for each issue.
-    pub fields: Option<Vec<String>>,
-    /// Expansion options.
-    pub expand: Option<String>,
-}
-
-/// Parameters for moving issues to a sprint.
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct MoveIssuesToSprintParams {
-    /// The ID of the sprint.
+pub struct SprintAnalysis {
     pub sprint_id: i64,
-    /// The keys or IDs of the issues to move.
-    pub issues: Vec<String>,
-}
-
-/// Parameters for moving issues to the backlog.
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct MoveIssuesToBacklogParams {
-    /// The keys or IDs of the issues to move.
-    pub issues: Vec<String>,
+    pub sprint_name: String,
+    pub sprint_state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub velocity: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unestimated_issues: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blocked_issues: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_points: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completed_points: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completion_percentage: Option<f64>,
 }

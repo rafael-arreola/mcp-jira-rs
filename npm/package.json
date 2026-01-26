@@ -1,6 +1,6 @@
 {
   "name": "@rafael-arreola/jira-rs",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Jira MCP Server CLI wrapper",
   "bin": {
     "jira-rs": "./bin.js"
