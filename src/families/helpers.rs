@@ -6,15 +6,26 @@ use serde::{Deserialize, Serialize};
 // PUBLIC API - Text to ADF Conversion (Exposed to MCP)
 // ============================================================================
 
+#[derive(Debug, Serialize, Deserialize, JsonSchema, Default, Clone, Copy)]
+#[serde(rename_all = "camelCase")]
+pub enum AdfStyle {
+    #[default]
+    Paragraph,
+    Heading1,
+    Heading2,
+    Heading3,
+    Codeblock,
+}
+
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TextToAdfParams {
     /// Plain text to convert to Atlassian Document Format (ADF)
     pub text: String,
 
-    /// Text style: "paragraph" (default), "heading1", "heading2", "heading3", "codeblock"
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub style: Option<String>,
+    /// Text style
+    #[serde(default)]
+    pub style: AdfStyle,
 }
 
 // ============================================================================
@@ -32,9 +43,9 @@ pub struct AdfDocument {
 // HELPER FUNCTIONS
 // ============================================================================
 
-pub fn text_to_adf(text: &str, style: Option<&str>) -> JsonValue {
+pub fn text_to_adf(text: &str, style: AdfStyle) -> JsonValue {
     match style {
-        Some("heading1") => JsonValue(serde_json::json!({
+        AdfStyle::Heading1 => JsonValue(serde_json::json!({
             "version": 1,
             "type": "doc",
             "content": [
@@ -50,7 +61,7 @@ pub fn text_to_adf(text: &str, style: Option<&str>) -> JsonValue {
                 }
             ]
         })),
-        Some("heading2") => JsonValue(serde_json::json!({
+        AdfStyle::Heading2 => JsonValue(serde_json::json!({
             "version": 1,
             "type": "doc",
             "content": [
@@ -66,7 +77,7 @@ pub fn text_to_adf(text: &str, style: Option<&str>) -> JsonValue {
                 }
             ]
         })),
-        Some("heading3") => JsonValue(serde_json::json!({
+        AdfStyle::Heading3 => JsonValue(serde_json::json!({
             "version": 1,
             "type": "doc",
             "content": [
@@ -82,7 +93,7 @@ pub fn text_to_adf(text: &str, style: Option<&str>) -> JsonValue {
                 }
             ]
         })),
-        Some("codeblock") => JsonValue(serde_json::json!({
+        AdfStyle::Codeblock => JsonValue(serde_json::json!({
             "version": 1,
             "type": "doc",
             "content": [
@@ -97,7 +108,7 @@ pub fn text_to_adf(text: &str, style: Option<&str>) -> JsonValue {
                 }
             ]
         })),
-        _ => JsonValue(serde_json::json!({
+        AdfStyle::Paragraph => JsonValue(serde_json::json!({
             "version": 1,
             "type": "doc",
             "content": [

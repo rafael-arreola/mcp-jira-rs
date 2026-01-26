@@ -124,46 +124,42 @@ Rich text fields like 'description' must use ADF format. Use text_to_adf tool to
         &self,
         wrapper::Parameters(params): wrapper::Parameters<families::issue::IssueMutateParams>,
     ) -> String {
-        let result = match params.operation.as_str() {
-            "create" => {
+        let operation = params.operation.clone();
+        let result = match operation {
+            families::issue::IssueOperation::Create => {
                 if params.bulk.unwrap_or(false) {
                     self.handle_bulk_create(params.data).await
                 } else {
                     self.handle_create(params.data).await
                 }
             }
-            "update" => {
+            families::issue::IssueOperation::Update => {
                 let key = match params.issue_id_or_key {
                     Some(k) => k.clone(),
                     None => return r#"{"error": "issueIdOrKey required for update"}"#.to_string(),
                 };
                 self.handle_update(key, params.data).await
             }
-            "delete" => {
+            families::issue::IssueOperation::Delete => {
                 let key = match params.issue_id_or_key {
                     Some(k) => k.clone(),
                     None => return r#"{"error": "issueIdOrKey required for delete"}"#.to_string(),
                 };
                 self.handle_delete(key, params.data).await
             }
-            "assign" => {
+            families::issue::IssueOperation::Assign => {
                 let key = match params.issue_id_or_key {
                     Some(k) => k.clone(),
                     None => return r#"{"error": "issueIdOrKey required for assign"}"#.to_string(),
                 };
                 self.handle_assign(key, params.data).await
             }
-            "transition" => {
+            families::issue::IssueOperation::Transition => {
                 let key = match params.issue_id_or_key {
                     Some(k) => k.clone(),
                     None => return r#"{"error": "issueIdOrKey required for transition"}"#.to_string(),
                 };
                 self.handle_transition(key, params.data).await
-            }
-            op => {
-                return serde_json::json!({
-                    "error": format!("Unknown operation '{}'. Valid: create, update, delete, assign, transition", op)
-                }).to_string()
             }
         };
 
@@ -172,6 +168,7 @@ Rich text fields like 'description' must use ADF format. Use text_to_adf tool to
             Err(e) => e.to_string(),
         }
     }
+
 
     #[rmcp::tool(
         name = "issue_query",
@@ -495,15 +492,16 @@ BACKLOG:
         &self,
         wrapper::Parameters(params): wrapper::Parameters<families::agile::AgileQueryParams>,
     ) -> String {
-        let result = match params.resource.as_str() {
-            "board" => {
+        let resource = params.resource.clone();
+        let result = match resource {
+            families::agile::AgileQueryResource::Board => {
                 if let Some(board_id) = params.board_id {
                     self.get_board_internal(board_id).await
                 } else {
                     self.get_boards_internal(params).await
                 }
             }
-            "sprint" => {
+            families::agile::AgileQueryResource::Sprint => {
                 if let Some(sprint_id) = params.sprint_id {
                     self.get_sprint_internal(sprint_id).await
                 } else if let Some(board_id) = params.board_id {
@@ -512,21 +510,20 @@ BACKLOG:
                     Err("boardId or sprintId required for sprint queries".into())
                 }
             }
-            "issues" => {
+            families::agile::AgileQueryResource::Issues => {
                 let board_id = match params.board_id {
                     Some(id) => id,
                     None => return r#"{"error": "boardId required for issues query"}"#.to_string(),
                 };
                 self.get_board_issues_internal(board_id, params).await
             }
-            "backlog" => {
+            families::agile::AgileQueryResource::Backlog => {
                 let board_id = match params.board_id {
                     Some(id) => id,
                     None => return r#"{"error": "boardId required for backlog query"}"#.to_string(),
                 };
                 self.get_board_backlog_internal(board_id, params).await
             }
-            r => Err(format!("Unknown resource '{}'. Valid: board, sprint, issues, backlog", r).into()),
         };
 
         match result {
@@ -1072,7 +1069,7 @@ Returns ADF JSON structure."#
         &self,
         wrapper::Parameters(params): wrapper::Parameters<families::helpers::TextToAdfParams>,
     ) -> String {
-        let adf = families::helpers::text_to_adf(&params.text, params.style.as_deref());
+        let adf = families::helpers::text_to_adf(&params.text, params.style);
         let response = families::helpers::AdfDocument { adf };
         serde_json::to_string(&response).unwrap_or_default()
     }

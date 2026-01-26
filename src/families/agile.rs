@@ -7,11 +7,20 @@ use serde::{Deserialize, Serialize};
 // PUBLIC API - Agile Queries (Exposed to MCP)
 // ============================================================================
 
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema, Clone)]
+#[serde(rename_all = "camelCase")]
+pub enum AgileQueryResource {
+    Board,
+    Sprint,
+    Backlog,
+    Issues,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct AgileQueryParams {
     /// Resource type: "board", "sprint", "backlog", "issues"
-    pub resource: String,
+    pub resource: AgileQueryResource,
 
     /// Board ID (required for most operations)
     #[serde(skip_serializing_if = "Option::is_none")]

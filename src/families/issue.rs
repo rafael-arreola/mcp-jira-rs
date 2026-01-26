@@ -7,11 +7,21 @@ use std::collections::HashMap;
 // PUBLIC API - Issue Mutations (Exposed to MCP)
 // ============================================================================
 
+#[derive(Debug, Serialize, Deserialize, JsonSchema, Clone)]
+#[serde(rename_all = "camelCase")]
+pub enum IssueOperation {
+    Create,
+    Update,
+    Delete,
+    Assign,
+    Transition,
+}
+
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct IssueMutateParams {
     /// Operation type: "create", "update", "delete", "assign", "transition"
-    pub operation: String,
+    pub operation: IssueOperation,
 
     /// Issue ID or key (required for update/delete/assign/transition, omit for create)
     #[serde(skip_serializing_if = "Option::is_none")]
