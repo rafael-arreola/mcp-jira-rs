@@ -30,6 +30,7 @@ impl Jira {
     pub fn new(workspace: &str, username: &str, password: &str) -> Self {
         let mut tool_router = Self::tool_router();
 
+        // Remove $schema to ensure compatibility with Gemini
         for (_, route) in tool_router.map.iter_mut() {
             let map = std::sync::Arc::make_mut(&mut route.attr.input_schema);
             map.remove("$schema");
@@ -53,159 +54,212 @@ impl Jira {
     // =========================================================================
 
     #[rmcp::tool(
-        name = "issue_mutate",
-        description = r#"Unified tool for issue mutations (create, update, delete, assign, transition).
-
-OPERATIONS:
-
-1. CREATE - Creates a new issue
-   {
-     "operation": "create",
-     "data": {
-       "fields": {
-         "project": {"key": "PROJ"},
-         "summary": "Issue title",
-         "issuetype": {"name": "Task"},
-         "description": {...ADF format...}
-       },
-       "update": {...} (optional)
-     }
-   }
-
-2. UPDATE - Updates an existing issue
-   {
-     "operation": "update",
-     "issueIdOrKey": "PROJ-123",
-     "data": {
-       "fields": {"summary": "New title"},
-       "update": {...} (optional),
-       "notifyUsers": true (optional)
-     }
-   }
-
-3. DELETE - Deletes an issue
-   {
-     "operation": "delete",
-     "issueIdOrKey": "PROJ-123",
-     "data": {"deleteSubtasks": "true"} (optional)
-   }
-
-4. ASSIGN - Assigns an issue to a user
-   {
-     "operation": "assign",
-     "issueIdOrKey": "PROJ-123",
-     "data": {"accountId": "5b10a..."}
-   }
-
-5. TRANSITION - Transitions issue to new status
-   {
-     "operation": "transition",
-     "issueIdOrKey": "PROJ-123",
-     "data": {
-       "transition": {"id": "21"},
-       "fields": {...} (optional),
-       "update": {...} (optional)
-     }
-   }
-
-BULK MODE (create only):
-   {
-     "operation": "create",
-     "bulk": true,
-     "data": [
-       {"fields": {...}},
-       {"fields": {...}}
-     ]
-   }
-
-Rich text fields like 'description' must use ADF format. Use text_to_adf tool to convert plain text."#
+        name = "issue_create",
+        description = "Creates an issue or a sub-task from a JSON representation. The content of the issue is defined using the 'fields' parameter. This tool uses strict typing to guide you on standard fields (summary, description, priority, etc.), while custom fields can be added dynamically. Use 'issue_get_required_fields' first to understand what is needed."
     )]
-    async fn issue_mutate(
+    async fn create_issue(
         &self,
-        wrapper::Parameters(params): wrapper::Parameters<families::issue::IssueMutateParams>,
+        wrapper::Parameters(params): wrapper::Parameters<families::issue::IssueCreateParams>,
     ) -> String {
-        let operation = params.operation.clone();
-        let result = match operation {
-            families::issue::IssueOperation::Create => {
-                if params.bulk.unwrap_or(false) {
-                    self.handle_bulk_create(params.data).await
-                } else {
-                    self.handle_create(params.data).await
-                }
-            }
-            families::issue::IssueOperation::Update => {
-                let key = match params.issue_id_or_key {
-                    Some(k) => k.clone(),
-                    None => return r#"{"error": "issueIdOrKey required for update"}"#.to_string(),
-                };
-                self.handle_update(key, params.data).await
-            }
-            families::issue::IssueOperation::Delete => {
-                let key = match params.issue_id_or_key {
-                    Some(k) => k.clone(),
-                    None => return r#"{"error": "issueIdOrKey required for delete"}"#.to_string(),
-                };
-                self.handle_delete(key, params.data).await
-            }
-            families::issue::IssueOperation::Assign => {
-                let key = match params.issue_id_or_key {
-                    Some(k) => k.clone(),
-                    None => return r#"{"error": "issueIdOrKey required for assign"}"#.to_string(),
-                };
-                self.handle_assign(key, params.data).await
-            }
-            families::issue::IssueOperation::Transition => {
-                let key = match params.issue_id_or_key {
-                    Some(k) => k.clone(),
-                    None => return r#"{"error": "issueIdOrKey required for transition"}"#.to_string(),
-                };
-                self.handle_transition(key, params.data).await
-            }
+        let url = "/rest/api/3/issue";
+
+        // Convert strict struct to generic JSON to inject project/issuetype
+        // This follows the 'Local Body' pattern implicitly by manipulating the JSON before sending
+        let mut fields_json = serde_json::to_value(params.fields).unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+        
+        if let Some(obj) = fields_json.as_object_mut() {
+            obj.insert("project".to_string(), serde_json::json!({ "key": params.project_key }));
+            obj.insert("issuetype".to_string(), serde_json::json!({ "name": params.issue_type }));
+        }
+
+        let payload = families::issue::CreateIssueData {
+            fields: families::JsonValue(fields_json),
+            update: params.update,
         };
 
-        match result {
-            Ok(res) => res,
+        match self.send_request::<families::issue::CreatedIssue, _>(url, Method::Post, None, Some(&payload)).await {
+            Ok(res) => serde_json::to_string(&res).unwrap_or_default(),
             Err(e) => e.to_string(),
         }
     }
 
+    #[rmcp::tool(
+        name = "issue_update",
+        description = "Edits an issue. Issue properties may be updated as part of the edit. Note that issue transition is not supported here; use 'issue_transition' for that."
+    )]
+    async fn update_issue(
+        &self,
+        wrapper::Parameters(params): wrapper::Parameters<families::issue::IssueUpdateParams>,
+    ) -> String {
+        let url = format!("/rest/api/3/issue/{}", params.issue_id_or_key);
+        
+        let mut query = Vec::new();
+        if let Some(notify) = params.notify_users {
+            query.push(("notifyUsers", notify.to_string()));
+        }
+
+        let fields_val = params.fields.map(|f| families::JsonValue(serde_json::to_value(f).unwrap_or(serde_json::Value::Null)));
+
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Body<'a> {
+            #[serde(skip_serializing_if = "Option::is_none")]
+            fields: Option<families::JsonValue>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            update: Option<&'a families::JsonValue>,
+        }
+
+        let body = Body {
+            fields: fields_val,
+            update: params.update.as_ref(),
+        };
+
+        match self.send_request::<serde_json::Value, _>(&url, Method::Put, Some(&query), Some(&body)).await {
+            Ok(_) => format!(r#"{{"success": true, "message": "Issue {} updated successfully"}}"#, params.issue_id_or_key),
+            Err(e) => e.to_string(),
+        }
+    }
+
+    #[rmcp::tool(
+        name = "issue_assign",
+        description = "Assigns an issue to a user. Use this operation when the calling user does not have the 'Edit Issues' permission but has the 'Assign issue' permission."
+    )]
+    async fn assign_issue(
+        &self,
+        wrapper::Parameters(params): wrapper::Parameters<families::issue::IssueAssignParams>,
+    ) -> String {
+        let url = format!("/rest/api/3/issue/{}/assignee", params.issue_id_or_key);
+
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Body<'a> {
+            account_id: &'a str,
+        }
+        let body = Body {
+            account_id: &params.account_id,
+        };
+
+        match self.send_request::<serde_json::Value, _>(&url, Method::Put, None, Some(&body)).await {
+            Ok(_) => format!(r#"{{"success": true, "message": "Issue {} assigned successfully"}}"#, params.issue_id_or_key),
+            Err(e) => e.to_string(),
+        }
+    }
+
+    #[rmcp::tool(
+        name = "issue_transition",
+        description = "Performs an issue transition and, if the transition has a screen, updates the fields from the transition screen."
+    )]
+    async fn transition_issue(
+        &self,
+        wrapper::Parameters(params): wrapper::Parameters<families::issue::IssueTransitionParams>,
+    ) -> String {
+        let url = format!("/rest/api/3/issue/{}/transitions", params.issue_id_or_key);
+        
+        let fields_val = params.fields.map(|f| families::JsonValue(serde_json::to_value(f).unwrap_or(serde_json::Value::Null)));
+
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Body {
+            transition: families::issue::TransitionRef,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            fields: Option<families::JsonValue>,
+        }
+
+        let body = Body {
+            transition: families::issue::TransitionRef { id: params.transition_id },
+            fields: fields_val,
+        };
+
+        match self.send_request::<serde_json::Value, _>(&url, Method::Post, None, Some(&body)).await {
+            Ok(_) => format!(r#"{{"success": true, "message": "Issue {} transitioned successfully"}}"#, params.issue_id_or_key),
+            Err(e) => e.to_string(),
+        }
+    }
+
+    #[rmcp::tool(
+        name = "issue_delete",
+        description = "Deletes an issue. An issue cannot be deleted if it has one or more subtasks. To delete an issue with subtasks, set deleteSubtasks to true."
+    )]
+    async fn delete_issue(
+        &self,
+        wrapper::Parameters(params): wrapper::Parameters<families::issue::IssueDeleteParams>,
+    ) -> String {
+        let url = format!("/rest/api/3/issue/{}", params.issue_id_or_key);
+        let mut query = Vec::new();
+
+        if let Some(delete_subtasks) = params.delete_subtasks {
+            query.push(("deleteSubtasks", delete_subtasks.to_string()));
+        }
+
+        match self.send_request::<serde_json::Value, ()>(&url, Method::Delete, Some(&query), None).await {
+            Ok(_) => format!(r#"{{"success": true, "message": "Issue {} deleted successfully"}}"#, params.issue_id_or_key),
+            Err(e) => e.to_string(),
+        }
+    }
 
     #[rmcp::tool(
         name = "issue_query",
-        description = r#"Query issues - get single issue by ID/key or search with JQL.
-
-SINGLE ISSUE:
-   {
-     "issueIdOrKey": "PROJ-123",
-     "fields": ["summary", "status", "assignee"],
-     "expand": "renderedFields,transitions",
-     "includeTransitions": true
-   }
-
-SEARCH WITH JQL:
-   {
-     "jql": "project = PROJ AND status = Open",
-     "fields": ["summary", "status"],
-     "maxResults": 50,
-     "startAt": 0
-   }
-
-Returns issue details or search results with issues array."#
+        description = r#"Query issues - get single issue by ID/key or search with JQL. Returns issue details or search results."#
     )]
-    async fn issue_query(
+    async fn query_issue(
         &self,
         wrapper::Parameters(params): wrapper::Parameters<families::issue::IssueQueryParams>,
     ) -> String {
         if let Some(key) = params.issue_id_or_key.clone() {
-            let params_clone = params;
-            match self.get_issue_internal(key, params_clone).await {
-                Ok(res) => res,
+            // Get Single Issue Logic
+            let url = format!("/rest/api/3/issue/{}", key);
+            let mut query = Vec::new();
+
+            if let Some(fields) = &params.fields {
+                query.push(("fields", fields.join(",")));
+            }
+            if let Some(expand) = &params.expand {
+                query.push(("expand", expand.clone()));
+            }
+
+            match self.send_request::<families::issue::Issue, ()>(&url, Method::Get, Some(&query), None).await {
+                Ok(mut issue) => {
+                     // Internal check for transitions if requested
+                     if params.include_transitions.unwrap_or(false) {
+                        let trans_url = format!("/rest/api/3/issue/{}/transitions", key);
+                        if let Ok(trans_resp) = self.send_request::<families::issue::TransitionsResponse, ()>(&trans_url, Method::Get, None, None).await {
+                            if let Ok(val) = serde_json::to_value(trans_resp.transitions) {
+                                issue.fields.insert("transitions".to_string(), val);
+                            }
+                        }
+                    }
+                    serde_json::to_string(&issue).unwrap_or_default()
+                },
                 Err(e) => e.to_string(),
             }
         } else if let Some(jql) = params.jql.clone() {
-            let params_clone = params;
-            match self.search_issues_internal(jql, params_clone).await {
-                Ok(res) => res,
+            // JQL Search Logic
+            let url = "/rest/api/3/search/jql";
+            
+            #[derive(Serialize)]
+            #[serde(rename_all = "camelCase")]
+            struct Body {
+                jql: String,
+                #[serde(skip_serializing_if = "Option::is_none")]
+                fields: Option<Vec<String>>,
+                #[serde(skip_serializing_if = "Option::is_none")]
+                expand: Option<String>,
+                #[serde(skip_serializing_if = "Option::is_none")]
+                max_results: Option<i32>,
+                #[serde(skip_serializing_if = "Option::is_none")]
+                start_at: Option<i64>,
+            }
+
+            let body = Body {
+                jql,
+                fields: params.fields,
+                expand: params.expand,
+                max_results: params.max_results,
+                start_at: params.start_at,
+            };
+
+            match self.send_request::<families::issue::SearchResults, _>(url, Method::Post, None, Some(&body)).await {
+                Ok(res) => serde_json::to_string(&res).unwrap_or_default(),
                 Err(e) => e.to_string(),
             }
         } else {
@@ -214,20 +268,77 @@ Returns issue details or search results with issues array."#
     }
 
     #[rmcp::tool(
-        name = "issue_get_metadata",
-        description = r#"Get metadata for creating issues in a project.
-
-Returns available issue types and their required/optional fields.
-
-USAGE:
-   {
-     "projectKey": "PROJ",
-     "issueTypeName": "Story" (optional - omit for all types)
-   }
-
-Use this before creating issues to discover required fields and their formats."#
+        name = "issue_get_required_fields",
+        description = "Returns ONLY the required fields for creating an issue of a specific type in a project. Highly recommended to use this before issue_create to avoid validation errors."
     )]
-    async fn issue_get_metadata(
+    async fn get_required_fields(
+        &self,
+        wrapper::Parameters(params): wrapper::Parameters<families::issue::IssueRequiredFieldsParams>,
+    ) -> String {
+        let url = "/rest/api/3/issue/createmeta";
+        let query = vec![
+            ("projectKeys", params.project_key.clone()),
+            ("issuetypeNames", params.issue_type_name.clone()),
+            ("expand", "projects.issuetypes.fields".to_string()),
+        ];
+
+        match self.send_request::<serde_json::Value, ()>(&url, Method::Get, Some(&query), None).await {
+            Ok(res) => {
+                let mut required_fields = Vec::new();
+                if let Some(projects) = res.get("projects").and_then(|p| p.as_array()) {
+                    for project in projects {
+                        if let Some(issue_types) = project.get("issuetypes").and_then(|it| it.as_array()) {
+                            for it in issue_types {
+                                if let Some(fields) = it.get("fields").and_then(|f| f.as_object()) {
+                                    for (field_id, field_info) in fields {
+                                        let is_required = field_info.get("required").and_then(|r| r.as_bool()).unwrap_or(false);
+                                        if is_required {
+                                            required_fields.push(families::issue::RequiredFieldInfo {
+                                                id: field_id.clone(),
+                                                name: field_info.get("name").and_then(|n| n.as_str()).unwrap_or("Unknown").to_string(),
+                                                required: true,
+                                                field_type: field_info.get("schema").and_then(|s| s.get("type")).and_then(|t| t.as_str()).unwrap_or("any").to_string(),
+                                                allowed_values: field_info.get("allowedValues").and_then(|v| serde_json::from_value(v.clone()).ok()),
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                serde_json::to_string(&required_fields).unwrap_or_default()
+            },
+            Err(e) => e.to_string(),
+        }
+    }
+
+    #[rmcp::tool(
+        name = "field_search_by_name",
+        description = "Searches for a field by its visible name and returns its ID (e.g., searches 'Story Points' and returns 'customfield_10016')."
+    )]
+    async fn search_field_by_name(
+        &self,
+        wrapper::Parameters(params): wrapper::Parameters<families::issue::FieldSearchByNameParams>,
+    ) -> String {
+        // Internal helper to reuse logic
+        match self.fetch_fields_internal().await {
+            Ok(fields) => {
+                let query = params.query.to_lowercase();
+                let results: Vec<_> = fields.into_iter()
+                    .filter(|f| f.name.to_lowercase().contains(&query))
+                    .collect();
+                serde_json::to_string(&results).unwrap_or_default()
+            }
+            Err(e) => e.to_string(),
+        }
+    }
+
+    #[rmcp::tool(
+        name = "issue_get_metadata",
+        description = r#"Get metadata for creating issues in a project. Returns available issue types and their required/optional fields."#
+    )]
+    async fn get_issue_metadata(
         &self,
         wrapper::Parameters(params): wrapper::Parameters<families::issue::IssueMetadataParams>,
     ) -> String {
@@ -254,64 +365,9 @@ Use this before creating issues to discover required fields and their formats."#
 
     #[rmcp::tool(
         name = "issue_content_manage",
-        description = r#"Manage issue comments and worklogs.
-
-COMMENT OPERATIONS:
-
-Add:
-   {
-     "contentType": "comment",
-     "operation": "add",
-     "issueIdOrKey": "PROJ-123",
-     "data": {
-       "body": {...ADF format...},
-       "visibility": {"type": "role", "value": "Developers"} (optional)
-     }
-   }
-
-Update:
-   {
-     "contentType": "comment",
-     "operation": "update",
-     "issueIdOrKey": "PROJ-123",
-     "contentId": "10001",
-     "data": {"body": {...ADF...}}
-   }
-
-Delete:
-   {
-     "contentType": "comment",
-     "operation": "delete",
-     "issueIdOrKey": "PROJ-123",
-     "contentId": "10001"
-   }
-
-Get:
-   {
-     "contentType": "comment",
-     "operation": "get",
-     "issueIdOrKey": "PROJ-123"
-   }
-
-WORKLOG OPERATIONS:
-
-Add:
-   {
-     "contentType": "worklog",
-     "operation": "add",
-     "issueIdOrKey": "PROJ-123",
-     "data": {
-       "timeSpent": "3h 30m",
-       "started": "2024-01-15T10:00:00.000+0000",
-       "comment": {...ADF...} (optional)
-     }
-   }
-
-Update/Delete/Get: Similar structure to comments.
-
-Use text_to_adf tool to convert plain text to ADF for body/comment fields."#
+        description = "Manage issue comments and worklogs."
     )]
-    async fn issue_content_manage(
+    async fn manage_content(
         &self,
         wrapper::Parameters(params): wrapper::Parameters<families::issue_content::IssueContentParams>,
     ) -> String {
@@ -329,29 +385,9 @@ Use text_to_adf tool to convert plain text to ADF for body/comment fields."#
 
     #[rmcp::tool(
         name = "issue_interact",
-        description = r#"Social interactions with issues (watch, vote).
-
-WATCH:
-   {
-     "action": "watch",
-     "issueIdOrKey": "PROJ-123",
-     "accountId": "5b10a..."
-   }
-
-UNWATCH:
-   {
-     "action": "unwatch",
-     "issueIdOrKey": "PROJ-123",
-     "accountId": "5b10a..."
-   }
-
-VOTE:
-   {
-     "action": "vote",
-     "issueIdOrKey": "PROJ-123"
-   }"#
+        description = "Social interactions with issues (watch, vote)."
     )]
-    async fn issue_interact(
+    async fn interact_issue(
         &self,
         wrapper::Parameters(params): wrapper::Parameters<families::issue_content::IssueSocialParams>,
     ) -> String {
@@ -379,50 +415,9 @@ VOTE:
 
     #[rmcp::tool(
         name = "issue_relations_manage",
-        description = r#"Manage issue attachments and links.
-
-ATTACHMENT OPERATIONS:
-
-Get:
-   {
-     "relationType": "attachment",
-     "operation": "get",
-     "issueIdOrKey": "PROJ-123"
-   }
-
-Delete:
-   {
-     "relationType": "attachment",
-     "operation": "delete",
-     "issueIdOrKey": "PROJ-123",
-     "relationId": "10001"
-   }
-
-LINK OPERATIONS:
-
-Create:
-   {
-     "relationType": "link",
-     "operation": "create",
-     "issueIdOrKey": "PROJ-123",
-     "data": {
-       "type": {"name": "Blocks"},
-       "inwardIssue": {"key": "PROJ-123"},
-       "outwardIssue": {"key": "PROJ-456"}
-     }
-   }
-
-Delete:
-   {
-     "relationType": "link",
-     "operation": "delete",
-     "issueIdOrKey": "PROJ-123",
-     "relationId": "10001"
-   }
-
-Note: Attachment upload not supported via MCP (requires multipart/form-data)."#
+        description = "Manage issue attachments and links."
     )]
-    async fn issue_relations_manage(
+    async fn manage_relations(
         &self,
         wrapper::Parameters(params): wrapper::Parameters<families::issue_relations::IssueRelationsParams>,
     ) -> String {
@@ -444,51 +439,9 @@ Note: Attachment upload not supported via MCP (requires multipart/form-data)."#
 
     #[rmcp::tool(
         name = "agile_query",
-        description = r#"Query agile resources (boards, sprints, issues, backlog).
-
-BOARDS:
-   {
-     "resource": "board",
-     "filters": {
-       "type": "scrum",
-       "name": "Team Board",
-       "projectKeyOrId": "PROJ"
-     },
-     "startAt": 0,
-     "maxResults": 50
-   }
-
-SPRINTS:
-   {
-     "resource": "sprint",
-     "boardId": 1,
-     "filters": {"state": "active,future"}
-   }
-
-SINGLE SPRINT:
-   {
-     "resource": "sprint",
-     "sprintId": 42
-   }
-
-ISSUES (on board):
-   {
-     "resource": "issues",
-     "boardId": 1,
-     "filters": {
-       "jql": "assignee = currentUser()",
-       "fields": ["summary", "status"]
-     }
-   }
-
-BACKLOG:
-   {
-     "resource": "backlog",
-     "boardId": 1,
-     "filters": {"jql": "priority = High"}
-   }"#
+        description = "Query agile resources (boards, sprints, issues, backlog)."
     )]
-    async fn agile_query(
+    async fn query_agile(
         &self,
         wrapper::Parameters(params): wrapper::Parameters<families::agile::AgileQueryParams>,
     ) -> String {
@@ -534,54 +487,9 @@ BACKLOG:
 
     #[rmcp::tool(
         name = "agile_sprint_manage",
-        description = r#"Manage sprints (create, update, delete, start, close).
-
-CREATE:
-   {
-     "operation": "create",
-     "boardId": 1,
-     "data": {
-       "name": "Sprint 42",
-       "startDate": "2024-01-15T09:00:00.000Z",
-       "endDate": "2024-01-29T17:00:00.000Z",
-       "goal": "Complete user authentication"
-     }
-   }
-
-UPDATE:
-   {
-     "operation": "update",
-     "sprintId": 42,
-     "data": {
-       "name": "Sprint 42 - Extended",
-       "endDate": "2024-02-05T17:00:00.000Z"
-     }
-   }
-
-START (same as update with state):
-   {
-     "operation": "start",
-     "sprintId": 42,
-     "data": {
-       "state": "active",
-       "startDate": "2024-01-15T09:00:00.000Z"
-     }
-   }
-
-CLOSE:
-   {
-     "operation": "close",
-     "sprintId": 42,
-     "data": {"state": "closed"}
-   }
-
-DELETE:
-   {
-     "operation": "delete",
-     "sprintId": 42
-   }"#
+        description = "Manage sprints (create, update, delete, start, close)."
     )]
-    async fn agile_sprint_manage(
+    async fn manage_sprint(
         &self,
         wrapper::Parameters(params): wrapper::Parameters<families::agile::AgileSprintManageParams>,
     ) -> String {
@@ -626,22 +534,9 @@ DELETE:
 
     #[rmcp::tool(
         name = "agile_move_issues",
-        description = r#"Move issues to sprint or backlog.
-
-TO SPRINT:
-   {
-     "destination": "sprint",
-     "destinationId": 42,
-     "issues": ["PROJ-123", "PROJ-456"]
-   }
-
-TO BACKLOG:
-   {
-     "destination": "backlog",
-     "issues": ["PROJ-123", "PROJ-456"]
-   }"#
+        description = "Move issues to sprint or backlog."
     )]
-    async fn agile_move_issues(
+    async fn move_issues(
         &self,
         wrapper::Parameters(params): wrapper::Parameters<families::agile::AgileMoveIssuesParams>,
     ) -> String {
@@ -665,30 +560,9 @@ TO BACKLOG:
 
     #[rmcp::tool(
         name = "agile_sprint_analyze",
-        description = r#"Analyze sprint metrics and health.
-
-USAGE:
-   {
-     "sprintId": 42,
-     "metrics": ["velocity", "unestimated", "blocked", "completion"]
-   }
-
-Or for active sprint:
-   {
-     "boardId": 1,
-     "metrics": ["velocity", "capacity"]
-   }
-
-METRICS:
-- velocity: Story points completed
-- unestimated: Issues without story points
-- blocked: Blocked issues
-- capacity: Total planned vs completed
-- completion: Completion percentage
-
-Returns sprint analysis with requested metrics."#
+        description = "Analyze sprint metrics and health."
     )]
-    async fn agile_sprint_analyze(
+    async fn analyze_sprint(
         &self,
         wrapper::Parameters(params): wrapper::Parameters<families::agile::AgileSprintAnalyzeParams>,
     ) -> String {
@@ -704,34 +578,9 @@ Returns sprint analysis with requested metrics."#
 
     #[rmcp::tool(
         name = "metadata_get_catalog",
-        description = r#"Get metadata catalogs (labels, priorities, resolutions, statuses, issue types).
-
-LABELS:
-   {
-     "catalogType": "labels",
-     "startAt": 0,
-     "maxResults": 50
-   }
-
-PRIORITIES:
-   {
-     "catalogType": "priorities"
-   }
-
-RESOLUTIONS:
-   {
-     "catalogType": "resolutions"
-   }
-
-ISSUE TYPES (for project):
-   {
-     "catalogType": "issueTypes",
-     "projectKey": "PROJ"
-   }
-
-Returns list of available values for the specified catalog type."#
+        description = "Get metadata catalogs (labels, priorities, resolutions, statuses, issue types)."
     )]
-    async fn metadata_get_catalog(
+    async fn get_catalog(
         &self,
         wrapper::Parameters(params): wrapper::Parameters<families::metadata::MetadataCatalogParams>,
     ) -> String {
@@ -758,31 +607,9 @@ Returns list of available values for the specified catalog type."#
 
     #[rmcp::tool(
         name = "field_discover",
-        description = r#"Discover fields and their configurations.
-
-GLOBAL FIELDS:
-   {
-     "scope": "global",
-     "fieldType": "custom",
-     "searchTerm": "story"
-   }
-
-PROJECT FIELDS (with metadata):
-   {
-     "scope": "project",
-     "scopeId": "PROJ",
-     "includeOptions": true
-   }
-
-ISSUE TYPE FIELDS:
-   {
-     "scope": "issueType",
-     "scopeId": "Story"
-   }
-
-Use this to discover field IDs (like customfield_10001 for Story Points) before updating issues."#
+        description = "Discover fields and their configurations."
     )]
-    async fn field_discover(
+    async fn discover_fields(
         &self,
         wrapper::Parameters(params): wrapper::Parameters<families::metadata::FieldDiscoverParams>,
     ) -> String {
@@ -811,40 +638,9 @@ Use this to discover field IDs (like customfield_10001 for Story Points) before 
 
     #[rmcp::tool(
         name = "project_query",
-        description = r#"Query project resources.
-
-PROJECTS:
-   {
-     "resource": "project",
-     "startAt": 0,
-     "maxResults": 50
-   }
-
-VERSIONS:
-   {
-     "resource": "versions",
-     "projectKey": "PROJ"
-   }
-
-COMPONENTS:
-   {
-     "resource": "components",
-     "projectKey": "PROJ"
-   }
-
-ROLES:
-   {
-     "resource": "roles",
-     "projectKey": "PROJ"
-   }
-
-ISSUE TYPES:
-   {
-     "resource": "issueTypes",
-     "projectKey": "PROJ"
-   }"#
+        description = "Query project resources."
     )]
-    async fn project_query(
+    async fn query_project(
         &self,
         wrapper::Parameters(params): wrapper::Parameters<families::project::ProjectQueryParams>,
     ) -> String {
@@ -869,35 +665,9 @@ ISSUE TYPES:
 
     #[rmcp::tool(
         name = "project_manage",
-        description = r#"Manage project versions and components.
-
-CREATE VERSION:
-   {
-     "resource": "version",
-     "operation": "create",
-     "projectKey": "PROJ",
-     "data": {
-       "name": "v1.0.0",
-       "description": "First release",
-       "releaseDate": "2024-12-31"
-     }
-   }
-
-CREATE COMPONENT:
-   {
-     "resource": "component",
-     "operation": "create",
-     "projectKey": "PROJ",
-     "data": {
-       "name": "Backend",
-       "description": "Backend services",
-       "leadAccountId": "5b10a..."
-     }
-   }
-
-UPDATE/DELETE: Similar structure with resourceId for existing items."#
+        description = "Manage project versions and components."
     )]
-    async fn project_manage(
+    async fn manage_project(
         &self,
         wrapper::Parameters(params): wrapper::Parameters<families::project::ProjectManageParams>,
     ) -> String {
@@ -928,19 +698,9 @@ UPDATE/DELETE: Similar structure with resourceId for existing items."#
 
     #[rmcp::tool(
         name = "search_execute_jql",
-        description = r#"Execute JQL search query.
-
-USAGE:
-   {
-     "jql": "project = PROJ AND status = Open",
-     "fields": ["summary", "status", "assignee"],
-     "maxResults": 50,
-     "startAt": 0
-   }
-
-Returns paginated search results with issues array."#
+        description = "Execute JQL search query."
     )]
-    async fn search_execute_jql(
+    async fn execute_jql(
         &self,
         wrapper::Parameters(params): wrapper::Parameters<families::jql::SearchParams>,
     ) -> String {
@@ -953,16 +713,9 @@ Returns paginated search results with issues array."#
 
     #[rmcp::tool(
         name = "jql_parse",
-        description = r#"Parse and validate JQL queries.
-
-USAGE:
-   {
-     "queries": ["project = PROJ AND status = Open", "assignee = currentUser()"]
-   }
-
-Returns validation results for each query."#
+        description = "Parse and validate JQL queries."
     )]
-    async fn jql_parse(
+    async fn parse_jql(
         &self,
         wrapper::Parameters(params): wrapper::Parameters<families::jql::ParseJqlQueryParams>,
     ) -> String {
@@ -980,17 +733,9 @@ Returns validation results for each query."#
 
     #[rmcp::tool(
         name = "user_search",
-        description = r#"Search for users.
-
-USAGE:
-   {
-     "query": "john",
-     "maxResults": 50
-   }
-
-Returns list of users matching the search query."#
+        description = "Search for users."
     )]
-    async fn user_search(
+    async fn search_user(
         &self,
         wrapper::Parameters(params): wrapper::Parameters<families::user::SearchUsersParams>,
     ) -> String {
@@ -1017,16 +762,9 @@ Returns list of users matching the search query."#
 
     #[rmcp::tool(
         name = "user_get_myself",
-        description = r#"Get current user details.
-
-USAGE:
-   {
-     "expand": "groups,applicationRoles"
-   }
-
-Returns current authenticated user information."#
+        description = "Get current user details."
     )]
-    async fn user_get_myself(
+    async fn get_myself(
         &self,
         wrapper::Parameters(params): wrapper::Parameters<families::user::GetMyselfParams>,
     ) -> String {
@@ -1048,24 +786,9 @@ Returns current authenticated user information."#
 
     #[rmcp::tool(
         name = "text_to_adf",
-        description = r#"Convert plain text to Atlassian Document Format (ADF).
-
-USAGE:
-   {
-     "text": "This is plain text",
-     "style": "paragraph"
-   }
-
-STYLES:
-- "paragraph" (default)
-- "heading1"
-- "heading2"
-- "heading3"
-- "codeblock"
-
-Returns ADF JSON structure."#
+        description = "Convert plain text to Atlassian Document Format (ADF)."
     )]
-    async fn text_to_adf(
+    async fn convert_to_adf(
         &self,
         wrapper::Parameters(params): wrapper::Parameters<families::helpers::TextToAdfParams>,
     ) -> String {
@@ -1075,184 +798,18 @@ Returns ADF JSON structure."#
     }
 
     // =========================================================================
-    // ISSUE INTERNAL HANDLERS
+    // HELPER INTERNAL METHODS
     // =========================================================================
 
-    async fn handle_create(
-        &self,
-        data: families::JsonValue,
-    ) -> Result<String, Box<dyn std::error::Error>> {
-        let payload: families::issue::CreateIssueData = serde_json::from_value(data.0)?;
-        let url = "/rest/api/3/issue";
-        let response = self.send_request::<families::issue::CreatedIssue, _>(url, Method::Post, None, Some(&payload)).await?;
-        Ok(serde_json::to_string(&response)?)
+    async fn fetch_fields_internal(&self) -> Result<Vec<families::metadata::Field>, Box<dyn std::error::Error + Send + Sync>> {
+        let url = "/rest/api/3/field";
+        self.send_request::<Vec<families::metadata::Field>, ()>(&url, Method::Get, None, None).await
     }
-
-    async fn handle_bulk_create(
-        &self,
-        data: families::JsonValue,
-    ) -> Result<String, Box<dyn std::error::Error>> {
-        let items: Vec<families::issue::CreateIssueData> = serde_json::from_value(data.0)?;
-
-        #[derive(Serialize)]
-        #[serde(rename_all = "camelCase")]
-        struct BulkPayload {
-            issue_updates: Vec<families::issue::CreateIssueData>,
-        }
-
-        let payload = BulkPayload { issue_updates: items };
-        let url = "/rest/api/3/issue/bulk";
-        let response = self.send_request::<families::issue::BulkCreatedIssues, _>(url, Method::Post, None, Some(&payload)).await?;
-        Ok(serde_json::to_string(&response)?)
-    }
-
-    async fn handle_update(
-        &self,
-        key: String,
-        data: families::JsonValue,
-    ) -> Result<String, Box<dyn std::error::Error>> {
-        let payload: families::issue::UpdateIssueData = serde_json::from_value(data.0)?;
-        let url = format!("/rest/api/3/issue/{}", key);
-        let mut query = Vec::new();
-
-        if let Some(notify) = payload.notify_users {
-            query.push(("notifyUsers", notify.to_string()));
-        }
-        if let Some(override_editable) = payload.override_editable_flag {
-            query.push(("overrideEditableFlag", override_editable.to_string()));
-        }
-
-        #[derive(Serialize)]
-        #[serde(rename_all = "camelCase")]
-        struct Body<'a> {
-            #[serde(skip_serializing_if = "Option::is_none")]
-            fields: Option<&'a families::JsonValue>,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            update: Option<&'a families::JsonValue>,
-        }
-
-        let body = Body {
-            fields: payload.fields.as_ref(),
-            update: payload.update.as_ref(),
-        };
-
-        self.send_request::<serde_json::Value, _>(&url, Method::Put, Some(&query), Some(&body)).await?;
-        Ok(format!(r#"{{"success": true, "message": "Issue {} updated successfully"}}"#, key))
-    }
-
-    async fn handle_delete(
-        &self,
-        key: String,
-        data: families::JsonValue,
-    ) -> Result<String, Box<dyn std::error::Error>> {
-        let payload: families::issue::DeleteIssueData = serde_json::from_value(data.0)?;
-        let url = format!("/rest/api/3/issue/{}", key);
-        let mut query = Vec::new();
-
-        if let Some(delete_subtasks) = payload.delete_subtasks {
-            query.push(("deleteSubtasks", delete_subtasks));
-        }
-
-        self.send_request::<serde_json::Value, ()>(&url, Method::Delete, Some(&query), None).await?;
-        Ok(format!(r#"{{"success": true, "message": "Issue {} deleted successfully"}}"#, key))
-    }
-
-    async fn handle_assign(
-        &self,
-        key: String,
-        data: families::JsonValue,
-    ) -> Result<String, Box<dyn std::error::Error>> {
-        let payload: families::issue::AssignIssueData = serde_json::from_value(data.0)?;
-        let url = format!("/rest/api/3/issue/{}/assignee", key);
-        self.send_request::<serde_json::Value, _>(&url, Method::Put, None, Some(&payload)).await?;
-        Ok(format!(r#"{{"success": true, "message": "Issue {} assigned successfully"}}"#, key))
-    }
-
-    async fn handle_transition(
-        &self,
-        key: String,
-        data: families::JsonValue,
-    ) -> Result<String, Box<dyn std::error::Error>> {
-        let payload: families::issue::TransitionIssueData = serde_json::from_value(data.0)?;
-        let url = format!("/rest/api/3/issue/{}/transitions", key);
-        self.send_request::<serde_json::Value, _>(&url, Method::Post, None, Some(&payload)).await?;
-        Ok(format!(r#"{{"success": true, "message": "Issue {} transitioned successfully"}}"#, key))
-    }
-
-    async fn get_issue_internal(
-        &self,
-        key: String,
-        params: families::issue::IssueQueryParams,
-    ) -> Result<String, Box<dyn std::error::Error>> {
-        let url = format!("/rest/api/3/issue/{}", key);
-        let mut query = Vec::new();
-
-        if let Some(fields) = params.fields {
-            query.push(("fields", fields.join(",")));
-        }
-        if let Some(expand) = params.expand {
-            query.push(("expand", expand));
-        }
-        if let Some(properties) = params.properties {
-            query.push(("properties", properties.join(",")));
-        }
-
-        let mut issue = self.send_request::<families::issue::Issue, ()>(&url, Method::Get, Some(&query), None).await?;
-
-        if params.include_transitions.unwrap_or(false) {
-            let trans_url = format!("/rest/api/3/issue/{}/transitions", key);
-            if let Ok(trans_resp) = self.send_request::<families::issue::TransitionsResponse, ()>(&trans_url, Method::Get, None, None).await {
-                issue.fields.insert(
-                    "transitions".to_string(),
-                    serde_json::to_value(trans_resp.transitions)?,
-                );
-            }
-        }
-
-        Ok(serde_json::to_string(&issue)?)
-    }
-
-    async fn search_issues_internal(
-        &self,
-        jql: String,
-        params: families::issue::IssueQueryParams,
-    ) -> Result<String, Box<dyn std::error::Error>> {
-        let url = "/rest/api/3/search/jql";
-
-        #[derive(Serialize)]
-        #[serde(rename_all = "camelCase")]
-        struct SearchBody {
-            jql: String,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            fields: Option<Vec<String>>,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            expand: Option<String>,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            max_results: Option<i32>,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            start_at: Option<i64>,
-        }
-
-        let body = SearchBody {
-            jql,
-            fields: params.fields,
-            expand: params.expand,
-            max_results: params.max_results,
-            start_at: params.start_at,
-        };
-
-        let response = self.send_request::<families::issue::SearchResults, _>(url, Method::Post, None, Some(&body)).await?;
-        Ok(serde_json::to_string(&response)?)
-    }
-
-    // =========================================================================
-    // ISSUE CONTENT INTERNAL HANDLERS
-    // =========================================================================
 
     async fn handle_comment_operation(
         &self,
         params: families::issue_content::IssueContentParams,
-    ) -> Result<String, Box<dyn std::error::Error>> {
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         match params.operation.as_str() {
             "add" => {
                 let data = params.data.ok_or("data required for add")?;
@@ -1287,7 +844,7 @@ Returns ADF JSON structure."#
     async fn handle_worklog_operation(
         &self,
         params: families::issue_content::IssueContentParams,
-    ) -> Result<String, Box<dyn std::error::Error>> {
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         match params.operation.as_str() {
             "add" => {
                 let data = params.data.ok_or("data required for add")?;
@@ -1323,7 +880,7 @@ Returns ADF JSON structure."#
         &self,
         issue_key: &str,
         account_id: &str,
-    ) -> Result<String, Box<dyn std::error::Error>> {
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let url = format!("/rest/api/3/issue/{}/watchers", issue_key);
         self.send_request::<serde_json::Value, _>(&url, Method::Post, None, Some(&account_id)).await?;
         Ok(r#"{"success": true, "message": "Watcher added successfully"}"#.to_string())
@@ -1333,7 +890,7 @@ Returns ADF JSON structure."#
         &self,
         issue_key: &str,
         account_id: &str,
-    ) -> Result<String, Box<dyn std::error::Error>> {
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let url = format!("/rest/api/3/issue/{}/watchers", issue_key);
         let query = vec![("accountId", account_id.to_string())];
         self.send_request::<serde_json::Value, ()>(&url, Method::Delete, Some(&query), None).await?;
@@ -1343,20 +900,16 @@ Returns ADF JSON structure."#
     async fn add_vote_internal(
         &self,
         issue_key: &str,
-    ) -> Result<String, Box<dyn std::error::Error>> {
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let url = format!("/rest/api/3/issue/{}/votes", issue_key);
         self.send_request::<serde_json::Value, ()>(&url, Method::Post, None, None).await?;
         Ok(r#"{"success": true, "message": "Vote added successfully"}"#.to_string())
     }
 
-    // =========================================================================
-    // ISSUE RELATIONS INTERNAL HANDLERS
-    // =========================================================================
-
     async fn handle_attachment_operation(
         &self,
         params: families::issue_relations::IssueRelationsParams,
-    ) -> Result<String, Box<dyn std::error::Error>> {
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         match params.operation.as_str() {
             "get" => {
                 let url = format!("/rest/api/3/issue/{}/attachments", params.issue_id_or_key);
@@ -1376,7 +929,7 @@ Returns ADF JSON structure."#
     async fn handle_link_operation(
         &self,
         params: families::issue_relations::IssueRelationsParams,
-    ) -> Result<String, Box<dyn std::error::Error>> {
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         match params.operation.as_str() {
             "create" => {
                 let data = params.data.ok_or("data required for create")?;
@@ -1395,14 +948,10 @@ Returns ADF JSON structure."#
         }
     }
 
-    // =========================================================================
-    // AGILE INTERNAL HANDLERS
-    // =========================================================================
-
     async fn get_board_internal(
         &self,
         board_id: i64,
-    ) -> Result<String, Box<dyn std::error::Error>> {
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let url = format!("/rest/agile/1.0/board/{}", board_id);
         let response = self.send_request::<families::agile::Board, ()>(&url, Method::Get, None, None).await?;
         Ok(serde_json::to_string(&response)?)
@@ -1411,7 +960,7 @@ Returns ADF JSON structure."#
     async fn get_boards_internal(
         &self,
         params: families::agile::AgileQueryParams,
-    ) -> Result<String, Box<dyn std::error::Error>> {
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let url = "/rest/agile/1.0/board";
         let mut query = Vec::new();
 
@@ -1442,7 +991,7 @@ Returns ADF JSON structure."#
     async fn get_sprint_internal(
         &self,
         sprint_id: i64,
-    ) -> Result<String, Box<dyn std::error::Error>> {
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let url = format!("/rest/agile/1.0/sprint/{}", sprint_id);
         let response = self.send_request::<families::agile::Sprint, ()>(&url, Method::Get, None, None).await?;
         Ok(serde_json::to_string(&response)?)
@@ -1452,7 +1001,7 @@ Returns ADF JSON structure."#
         &self,
         board_id: i64,
         params: families::agile::AgileQueryParams,
-    ) -> Result<String, Box<dyn std::error::Error>> {
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let url = format!("/rest/agile/1.0/board/{}/sprint", board_id);
         let mut query = Vec::new();
 
@@ -1478,7 +1027,7 @@ Returns ADF JSON structure."#
         &self,
         board_id: i64,
         data: families::JsonValue,
-    ) -> Result<String, Box<dyn std::error::Error>> {
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let mut sprint_data: families::agile::SprintData = serde_json::from_value(data.0)?;
         sprint_data.origin_board_id = Some(board_id);
 
@@ -1491,7 +1040,7 @@ Returns ADF JSON structure."#
         &self,
         sprint_id: i64,
         data: families::JsonValue,
-    ) -> Result<String, Box<dyn std::error::Error>> {
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let sprint_data: families::agile::SprintData = serde_json::from_value(data.0)?;
         let url = format!("/rest/agile/1.0/sprint/{}", sprint_id);
         let response = self.send_request::<families::agile::Sprint, _>(&url, Method::Put, None, Some(&sprint_data)).await?;
@@ -1501,7 +1050,7 @@ Returns ADF JSON structure."#
     async fn delete_sprint_internal(
         &self,
         sprint_id: i64,
-    ) -> Result<String, Box<dyn std::error::Error>> {
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let url = format!("/rest/agile/1.0/sprint/{}", sprint_id);
         self.send_request::<serde_json::Value, ()>(&url, Method::Delete, None, None).await?;
         Ok(r#"{"success": true, "message": "Sprint deleted successfully"}"#.to_string())
@@ -1511,7 +1060,7 @@ Returns ADF JSON structure."#
         &self,
         board_id: i64,
         params: families::agile::AgileQueryParams,
-    ) -> Result<String, Box<dyn std::error::Error>> {
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let url = format!("/rest/agile/1.0/board/{}/issue", board_id);
         let mut query = Vec::new();
 
@@ -1540,7 +1089,7 @@ Returns ADF JSON structure."#
         &self,
         board_id: i64,
         params: families::agile::AgileQueryParams,
-    ) -> Result<String, Box<dyn std::error::Error>> {
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let url = format!("/rest/agile/1.0/board/{}/backlog", board_id);
         let mut query = Vec::new();
 
@@ -1566,7 +1115,7 @@ Returns ADF JSON structure."#
         &self,
         sprint_id: i64,
         issues: Vec<String>,
-    ) -> Result<String, Box<dyn std::error::Error>> {
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let url = format!("/rest/agile/1.0/sprint/{}/issue", sprint_id);
 
         #[derive(Serialize)]
@@ -1582,7 +1131,7 @@ Returns ADF JSON structure."#
     async fn move_to_backlog_internal(
         &self,
         issues: Vec<String>,
-    ) -> Result<String, Box<dyn std::error::Error>> {
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let url = "/rest/agile/1.0/backlog/issue";
 
         #[derive(Serialize)]
@@ -1598,7 +1147,7 @@ Returns ADF JSON structure."#
     async fn analyze_sprint_internal(
         &self,
         params: families::agile::AgileSprintAnalyzeParams,
-    ) -> Result<String, Box<dyn std::error::Error>> {
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let sprint_id = if let Some(id) = params.sprint_id {
             id
         } else if let Some(board_id) = params.board_id {
@@ -1714,7 +1263,7 @@ Returns ADF JSON structure."#
     async fn get_labels_internal(
         &self,
         params: families::metadata::MetadataCatalogParams,
-    ) -> Result<String, Box<dyn std::error::Error>> {
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let url = "/rest/api/3/label";
         let mut query = Vec::new();
         if let Some(start_at) = params.start_at {
@@ -1728,13 +1277,13 @@ Returns ADF JSON structure."#
         Ok(serde_json::to_string(&response)?)
     }
 
-    async fn get_priorities_internal(&self) -> Result<String, Box<dyn std::error::Error>> {
+    async fn get_priorities_internal(&self) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let url = "/rest/api/3/priority";
         let response = self.send_request::<Vec<families::metadata::Priority>, ()>(&url, Method::Get, None, None).await?;
         Ok(serde_json::to_string(&response)?)
     }
 
-    async fn get_resolutions_internal(&self) -> Result<String, Box<dyn std::error::Error>> {
+    async fn get_resolutions_internal(&self) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let url = "/rest/api/3/resolution";
         let response = self.send_request::<Vec<families::metadata::Resolution>, ()>(&url, Method::Get, None, None).await?;
         Ok(serde_json::to_string(&response)?)
@@ -1743,7 +1292,7 @@ Returns ADF JSON structure."#
     async fn get_issue_types_for_project_internal(
         &self,
         project_key: String,
-    ) -> Result<String, Box<dyn std::error::Error>> {
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let url = format!("/rest/api/3/project/{}", project_key);
         let response = self.send_request::<serde_json::Value, ()>(&url, Method::Get, None, None).await?;
 
@@ -1754,24 +1303,19 @@ Returns ADF JSON structure."#
         }
     }
 
-    async fn get_all_issue_types_internal(&self) -> Result<String, Box<dyn std::error::Error>> {
+    async fn get_all_issue_types_internal(&self) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let url = "/rest/api/3/issuetype";
         let response = self.send_request::<Vec<families::metadata::IssueType>, ()>(&url, Method::Get, None, None).await?;
         Ok(serde_json::to_string(&response)?)
     }
 
-    async fn get_statuses_internal(&self) -> Result<String, Box<dyn std::error::Error>> {
+    async fn get_statuses_internal(&self) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let url = "/rest/api/3/status";
         let response = self.send_request::<Vec<families::metadata::Status>, ()>(&url, Method::Get, None, None).await?;
         Ok(serde_json::to_string(&response)?)
     }
 
-    async fn fetch_fields_internal(&self) -> Result<Vec<families::metadata::Field>, Box<dyn std::error::Error>> {
-        let url = "/rest/api/3/field";
-        self.send_request::<Vec<families::metadata::Field>, ()>(&url, Method::Get, None, None).await
-    }
-
-    async fn find_story_points_field_id(&self) -> Result<String, Box<dyn std::error::Error>> {
+    async fn find_story_points_field_id(&self) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let fields = self.fetch_fields_internal().await?;
         let candidates = ["Story Points", "Story point estimate"];
 
@@ -1787,7 +1331,7 @@ Returns ADF JSON structure."#
     async fn get_fields_internal(
         &self,
         params: families::metadata::FieldDiscoverParams,
-    ) -> Result<String, Box<dyn std::error::Error>> {
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let mut all_fields = self.fetch_fields_internal().await?;
 
         if let Some(field_type) = params.field_type {
@@ -1817,7 +1361,7 @@ Returns ADF JSON structure."#
         scope: String,
         scope_id: String,
         _params: families::metadata::FieldDiscoverParams,
-    ) -> Result<String, Box<dyn std::error::Error>> {
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let url = match scope.as_str() {
             "project" => format!("/rest/api/3/issue/createmeta?projectKeys={}&expand=projects.issuetypes.fields", scope_id),
             _ => return self.get_fields_internal(_params).await,
@@ -1834,7 +1378,7 @@ Returns ADF JSON structure."#
     async fn get_projects_internal(
         &self,
         params: families::project::ProjectQueryParams,
-    ) -> Result<String, Box<dyn std::error::Error>> {
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let url = "/rest/api/3/project/search";
         let mut query = Vec::new();
 
@@ -1854,7 +1398,7 @@ Returns ADF JSON structure."#
         resource: String,
         project_key: String,
         _params: families::project::ProjectQueryParams,
-    ) -> Result<String, Box<dyn std::error::Error>> {
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let url = match resource.as_str() {
             "versions" => format!("/rest/api/3/project/{}/versions", project_key),
             "components" => format!("/rest/api/3/project/{}/components", project_key),
@@ -1878,7 +1422,7 @@ Returns ADF JSON structure."#
         &self,
         project_key: String,
         data: families::JsonValue,
-    ) -> Result<String, Box<dyn std::error::Error>> {
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let mut version_data: families::project::VersionData = serde_json::from_value(data.0)?;
         version_data.project = Some(project_key);
 
@@ -1891,7 +1435,7 @@ Returns ADF JSON structure."#
         &self,
         project_key: String,
         data: families::JsonValue,
-    ) -> Result<String, Box<dyn std::error::Error>> {
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let mut component_data: families::project::ComponentData = serde_json::from_value(data.0)?;
         component_data.project = Some(project_key);
 
@@ -1899,13 +1443,14 @@ Returns ADF JSON structure."#
         let response = self.send_request::<families::project::Component, _>(&url, Method::Post, None, Some(&component_data)).await?;
         Ok(serde_json::to_string(&response)?)
     }
+
     async fn send_request<T, B>(
         &self,
         url: &str,
         method: Method,
         query_params: Option<&Vec<(&str, String)>>,
         body: Option<&B>,
-    ) -> Result<T, Box<dyn std::error::Error>>
+    ) -> Result<T, Box<dyn std::error::Error + Send + Sync>>
     where
         T: serde::de::DeserializeOwned,
         B: serde::Serialize,
