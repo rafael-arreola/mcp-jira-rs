@@ -944,7 +944,7 @@ Returns paginated search results with issues array."#
         &self,
         wrapper::Parameters(params): wrapper::Parameters<families::jql::SearchParams>,
     ) -> String {
-        let url = "/rest/api/3/search";
+        let url = "/rest/api/3/search/jql";
         match self.send_request::<families::issue::SearchResults, _>(&url, Method::Post, None, Some(&params)).await {
             Ok(res) => serde_json::to_string(&res).unwrap_or_default(),
             Err(e) => e.to_string(),
@@ -1217,7 +1217,7 @@ Returns ADF JSON structure."#
         jql: String,
         params: families::issue::IssueQueryParams,
     ) -> Result<String, Box<dyn std::error::Error>> {
-        let url = "/rest/api/3/search";
+        let url = "/rest/api/3/search/jql";
 
         #[derive(Serialize)]
         #[serde(rename_all = "camelCase")]
