@@ -1,0 +1,206 @@
+use super::enums;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueCreateArgs {
+    /// Project key (e.g., "PROJ").
+    pub project_key: String,
+    
+    /// Issue type. Values: Story, Bug, Epic, Task, Sub-task.
+    pub issue_type: enums::IssueType,
+
+    /// The issue title.
+    pub summary: String,
+
+    /// Plain text description (will be auto-converted to ADF).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+
+    /// Priority. Values: Highest, High, Medium, Low, Lowest.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub priority: Option<enums::Priority>,
+
+    /// Parent key. Required for Sub-tasks. For Stories, it can link to an Epic.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_key: Option<String>,
+
+    /// List of string tags.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub labels: Option<Vec<String>>,
+
+    /// List of component names.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub components: Option<Vec<String>>,
+
+    /// Numeric estimation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub story_points: Option<f64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueUpdateStatusArgs {
+    /// Issue ID or key (e.g., "PROJ-123").
+    pub issue_key: String,
+    
+    /// Target status. Values: To Do, In Progress, Done, In Review, Blocked, Cancelled.
+    pub status: enums::Status,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueAssignArgs {
+    /// Issue ID or key.
+    pub issue_key: String,
+    
+    /// Assignee identifier: "me", "unassigned", or Account ID.
+    pub assignee: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueEditDetailsArgs {
+    /// Issue ID or key.
+    pub issue_key: String,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub priority: Option<enums::Priority>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub labels: Option<Vec<String>>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub components: Option<Vec<String>>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub story_points: Option<f64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueAddCommentArgs {
+    /// Issue ID or key.
+    pub issue_key: String,
+    
+    /// Comment text.
+    pub comment: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueLinkArgs {
+    /// Source issue key.
+    pub source_issue_key: String,
+    
+    /// Target issue key.
+    pub target_issue_key: String,
+    
+    /// Link type. Values: Blocks, Is blocked by, Clones, Relates, Duplicates.
+    pub link_type: enums::LinkType,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueLogWorkArgs {
+    /// Issue ID or key.
+    pub issue_key: String,
+    
+    /// Time spent. E.g., "1h 30m".
+    pub time_spent: String,
+    
+    /// Started date (ISO 8601).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started: Option<String>,
+    
+    /// Optional comment.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comment: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueDeleteArgs {
+    /// Issue ID or key.
+    pub issue_key: String,
+    
+    /// Whether to delete subtasks.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delete_subtasks: Option<bool>,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueDeleteCommentArgs {
+    /// Issue ID or key.
+    pub issue_key: String,
+    
+    /// Comment ID.
+    pub comment_id: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueDeleteLinkArgs {
+    /// Link ID.
+    pub link_id: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueGetArgs {
+    /// Issue ID or key.
+    pub issue_key: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CreatedIssue {
+    pub id: String,
+    pub key: String,
+    #[serde(rename = "self")]
+    pub self_link: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Issue {
+    pub id: String,
+    pub key: String,
+    #[serde(rename = "self")]
+    pub self_link: String,
+    pub fields: HashMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct TransitionResponse {
+    pub transitions: Vec<Transition>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct Transition {
+    pub id: String,
+    pub name: String,
+    pub to: TransitionTo,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TransitionTo {
+    pub name: String,
+    pub status_category: Option<StatusCategory>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct StatusCategory {
+    pub key: String,
+}

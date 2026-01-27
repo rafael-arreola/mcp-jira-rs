@@ -1,4 +1,4 @@
-mod families;
+mod domains;
 mod jira;
 use rmcp::ServiceExt;
 

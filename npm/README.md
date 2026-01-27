@@ -59,7 +59,7 @@ Add to your Claude Desktop config file:
   "mcpServers": {
     "jira": {
       "command": "npx",
-      "args": ["-y", "@rafael-arreola/jira-rs"],
+      "args": ["-y", "@rafael-arreola/jira-rs@latest"],
       "env": {
         "JIRA_WORKSPACE": "your-workspace",
         "JIRA_USERNAME": "your-email@example.com",

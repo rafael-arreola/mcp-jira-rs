@@ -1,47 +1,18 @@
 use super::JsonValue;
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
 
 // ============================================================================
-// PUBLIC API - Text to ADF Conversion (Exposed to MCP)
+// HELPER FUNCTIONS
 // ============================================================================
 
-#[derive(Debug, Serialize, Deserialize, JsonSchema, Default, Clone, Copy)]
-#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy)]
 pub enum AdfStyle {
-    #[default]
     Paragraph,
     Heading1,
     Heading2,
     Heading3,
     Codeblock,
 }
-
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct TextToAdfParams {
-    /// Plain text to convert to Atlassian Document Format (ADF)
-    pub text: String,
-
-    /// Text style
-    #[serde(default)]
-    pub style: AdfStyle,
-}
-
-// ============================================================================
-// RESPONSE TYPES
-// ============================================================================
-
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct AdfDocument {
-    /// ADF document in JSON format
-    pub adf: JsonValue,
-}
-
-// ============================================================================
-// HELPER FUNCTIONS
-// ============================================================================
 
 pub fn text_to_adf(text: &str, style: AdfStyle) -> JsonValue {
     match style {

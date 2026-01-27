@@ -1,4 +1,4 @@
-use crate::families;
+use crate::domains;
 use reqwest::header::CONTENT_TYPE;
 use rmcp::{
     ServerHandler,
@@ -6,7 +6,7 @@ use rmcp::{
     model::{ServerCapabilities, ServerInfo},
     tool_handler, tool_router,
 };
-use serde::Serialize;
+use std::collections::HashMap;
 
 #[derive(Debug)]
 pub struct Jira {
@@ -49,1401 +49,9 @@ impl Jira {
         format!("https://{}.atlassian.net", self.workspace)
     }
 
-    // =========================================================================
-    // ISSUE OPERATIONS
-    // =========================================================================
-
-    #[rmcp::tool(
-        name = "issue_create",
-        description = "Creates an issue or a sub-task from a JSON representation. The content of the issue is defined using the 'fields' parameter. This tool uses strict typing to guide you on standard fields (summary, description, priority, etc.), while custom fields can be added dynamically. Use 'issue_get_required_fields' first to understand what is needed."
-    )]
-    async fn create_issue(
-        &self,
-        wrapper::Parameters(params): wrapper::Parameters<families::issue::IssueCreateParams>,
-    ) -> String {
-        let url = "/rest/api/3/issue";
-
-        // Convert strict struct to generic JSON to inject project/issuetype
-        // This follows the 'Local Body' pattern implicitly by manipulating the JSON before sending
-        let mut fields_json = serde_json::to_value(params.fields).unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
-        
-        if let Some(obj) = fields_json.as_object_mut() {
-            obj.insert("project".to_string(), serde_json::json!({ "key": params.project_key }));
-            obj.insert("issuetype".to_string(), serde_json::json!({ "name": params.issue_type }));
-        }
-
-        let payload = families::issue::CreateIssueData {
-            fields: families::JsonValue(fields_json),
-            update: params.update,
-        };
-
-        match self.send_request::<families::issue::CreatedIssue, _>(url, Method::Post, None, Some(&payload)).await {
-            Ok(res) => serde_json::to_string(&res).unwrap_or_default(),
-            Err(e) => e.to_string(),
-        }
-    }
-
-    #[rmcp::tool(
-        name = "issue_update",
-        description = "Edits an issue. Issue properties may be updated as part of the edit. Note that issue transition is not supported here; use 'issue_transition' for that."
-    )]
-    async fn update_issue(
-        &self,
-        wrapper::Parameters(params): wrapper::Parameters<families::issue::IssueUpdateParams>,
-    ) -> String {
-        let url = format!("/rest/api/3/issue/{}", params.issue_id_or_key);
-        
-        let mut query = Vec::new();
-        if let Some(notify) = params.notify_users {
-            query.push(("notifyUsers", notify.to_string()));
-        }
-
-        let fields_val = params.fields.map(|f| families::JsonValue(serde_json::to_value(f).unwrap_or(serde_json::Value::Null)));
-
-        #[derive(Serialize)]
-        #[serde(rename_all = "camelCase")]
-        struct Body<'a> {
-            #[serde(skip_serializing_if = "Option::is_none")]
-            fields: Option<families::JsonValue>,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            update: Option<&'a families::JsonValue>,
-        }
-
-        let body = Body {
-            fields: fields_val,
-            update: params.update.as_ref(),
-        };
-
-        match self.send_request::<serde_json::Value, _>(&url, Method::Put, Some(&query), Some(&body)).await {
-            Ok(_) => format!(r#"{{"success": true, "message": "Issue {} updated successfully"}}"#, params.issue_id_or_key),
-            Err(e) => e.to_string(),
-        }
-    }
-
-    #[rmcp::tool(
-        name = "issue_assign",
-        description = "Assigns an issue to a user. Use this operation when the calling user does not have the 'Edit Issues' permission but has the 'Assign issue' permission."
-    )]
-    async fn assign_issue(
-        &self,
-        wrapper::Parameters(params): wrapper::Parameters<families::issue::IssueAssignParams>,
-    ) -> String {
-        let url = format!("/rest/api/3/issue/{}/assignee", params.issue_id_or_key);
-
-        #[derive(Serialize)]
-        #[serde(rename_all = "camelCase")]
-        struct Body<'a> {
-            account_id: &'a str,
-        }
-        let body = Body {
-            account_id: &params.account_id,
-        };
-
-        match self.send_request::<serde_json::Value, _>(&url, Method::Put, None, Some(&body)).await {
-            Ok(_) => format!(r#"{{"success": true, "message": "Issue {} assigned successfully"}}"#, params.issue_id_or_key),
-            Err(e) => e.to_string(),
-        }
-    }
-
-    #[rmcp::tool(
-        name = "issue_transition",
-        description = "Performs an issue transition and, if the transition has a screen, updates the fields from the transition screen."
-    )]
-    async fn transition_issue(
-        &self,
-        wrapper::Parameters(params): wrapper::Parameters<families::issue::IssueTransitionParams>,
-    ) -> String {
-        let url = format!("/rest/api/3/issue/{}/transitions", params.issue_id_or_key);
-        
-        let fields_val = params.fields.map(|f| families::JsonValue(serde_json::to_value(f).unwrap_or(serde_json::Value::Null)));
-
-        #[derive(Serialize)]
-        #[serde(rename_all = "camelCase")]
-        struct Body {
-            transition: families::issue::TransitionRef,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            fields: Option<families::JsonValue>,
-        }
-
-        let body = Body {
-            transition: families::issue::TransitionRef { id: params.transition_id },
-            fields: fields_val,
-        };
-
-        match self.send_request::<serde_json::Value, _>(&url, Method::Post, None, Some(&body)).await {
-            Ok(_) => format!(r#"{{"success": true, "message": "Issue {} transitioned successfully"}}"#, params.issue_id_or_key),
-            Err(e) => e.to_string(),
-        }
-    }
-
-    #[rmcp::tool(
-        name = "issue_delete",
-        description = "Deletes an issue. An issue cannot be deleted if it has one or more subtasks. To delete an issue with subtasks, set deleteSubtasks to true."
-    )]
-    async fn delete_issue(
-        &self,
-        wrapper::Parameters(params): wrapper::Parameters<families::issue::IssueDeleteParams>,
-    ) -> String {
-        let url = format!("/rest/api/3/issue/{}", params.issue_id_or_key);
-        let mut query = Vec::new();
-
-        if let Some(delete_subtasks) = params.delete_subtasks {
-            query.push(("deleteSubtasks", delete_subtasks.to_string()));
-        }
-
-        match self.send_request::<serde_json::Value, ()>(&url, Method::Delete, Some(&query), None).await {
-            Ok(_) => format!(r#"{{"success": true, "message": "Issue {} deleted successfully"}}"#, params.issue_id_or_key),
-            Err(e) => e.to_string(),
-        }
-    }
-
-    #[rmcp::tool(
-        name = "issue_query",
-        description = r#"Query issues - get single issue by ID/key or search with JQL. Returns issue details or search results."#
-    )]
-    async fn query_issue(
-        &self,
-        wrapper::Parameters(params): wrapper::Parameters<families::issue::IssueQueryParams>,
-    ) -> String {
-        if let Some(key) = params.issue_id_or_key.clone() {
-            // Get Single Issue Logic
-            let url = format!("/rest/api/3/issue/{}", key);
-            let mut query = Vec::new();
-
-            if let Some(fields) = &params.fields {
-                query.push(("fields", fields.join(",")));
-            }
-            if let Some(expand) = &params.expand {
-                query.push(("expand", expand.clone()));
-            }
-
-            match self.send_request::<families::issue::Issue, ()>(&url, Method::Get, Some(&query), None).await {
-                Ok(mut issue) => {
-                     // Internal check for transitions if requested
-                     if params.include_transitions.unwrap_or(false) {
-                        let trans_url = format!("/rest/api/3/issue/{}/transitions", key);
-                        if let Ok(trans_resp) = self.send_request::<families::issue::TransitionsResponse, ()>(&trans_url, Method::Get, None, None).await {
-                            if let Ok(val) = serde_json::to_value(trans_resp.transitions) {
-                                issue.fields.insert("transitions".to_string(), val);
-                            }
-                        }
-                    }
-                    serde_json::to_string(&issue).unwrap_or_default()
-                },
-                Err(e) => e.to_string(),
-            }
-        } else if let Some(jql) = params.jql.clone() {
-            // JQL Search Logic
-            let url = "/rest/api/3/search/jql";
-            
-            #[derive(Serialize)]
-            #[serde(rename_all = "camelCase")]
-            struct Body {
-                jql: String,
-                #[serde(skip_serializing_if = "Option::is_none")]
-                fields: Option<Vec<String>>,
-                #[serde(skip_serializing_if = "Option::is_none")]
-                expand: Option<String>,
-                #[serde(skip_serializing_if = "Option::is_none")]
-                max_results: Option<i32>,
-                #[serde(skip_serializing_if = "Option::is_none")]
-                start_at: Option<i64>,
-            }
-
-            let body = Body {
-                jql,
-                fields: params.fields,
-                expand: params.expand,
-                max_results: params.max_results,
-                start_at: params.start_at,
-            };
-
-            match self.send_request::<families::issue::SearchResults, _>(url, Method::Post, None, Some(&body)).await {
-                Ok(res) => serde_json::to_string(&res).unwrap_or_default(),
-                Err(e) => e.to_string(),
-            }
-        } else {
-            r#"{"error": "Either issueIdOrKey or jql is required"}"#.to_string()
-        }
-    }
-
-    #[rmcp::tool(
-        name = "issue_get_required_fields",
-        description = "Returns ONLY the required fields for creating an issue of a specific type in a project. Highly recommended to use this before issue_create to avoid validation errors."
-    )]
-    async fn get_required_fields(
-        &self,
-        wrapper::Parameters(params): wrapper::Parameters<families::issue::IssueRequiredFieldsParams>,
-    ) -> String {
-        let url = "/rest/api/3/issue/createmeta";
-        let query = vec![
-            ("projectKeys", params.project_key.clone()),
-            ("issuetypeNames", params.issue_type_name.clone()),
-            ("expand", "projects.issuetypes.fields".to_string()),
-        ];
-
-        match self.send_request::<serde_json::Value, ()>(&url, Method::Get, Some(&query), None).await {
-            Ok(res) => {
-                let mut required_fields = Vec::new();
-                if let Some(projects) = res.get("projects").and_then(|p| p.as_array()) {
-                    for project in projects {
-                        if let Some(issue_types) = project.get("issuetypes").and_then(|it| it.as_array()) {
-                            for it in issue_types {
-                                if let Some(fields) = it.get("fields").and_then(|f| f.as_object()) {
-                                    for (field_id, field_info) in fields {
-                                        let is_required = field_info.get("required").and_then(|r| r.as_bool()).unwrap_or(false);
-                                        if is_required {
-                                            required_fields.push(families::issue::RequiredFieldInfo {
-                                                id: field_id.clone(),
-                                                name: field_info.get("name").and_then(|n| n.as_str()).unwrap_or("Unknown").to_string(),
-                                                required: true,
-                                                field_type: field_info.get("schema").and_then(|s| s.get("type")).and_then(|t| t.as_str()).unwrap_or("any").to_string(),
-                                                allowed_values: field_info.get("allowedValues").and_then(|v| serde_json::from_value(v.clone()).ok()),
-                                            });
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                serde_json::to_string(&required_fields).unwrap_or_default()
-            },
-            Err(e) => e.to_string(),
-        }
-    }
-
-    #[rmcp::tool(
-        name = "field_search_by_name",
-        description = "Searches for a field by its visible name and returns its ID (e.g., searches 'Story Points' and returns 'customfield_10016')."
-    )]
-    async fn search_field_by_name(
-        &self,
-        wrapper::Parameters(params): wrapper::Parameters<families::issue::FieldSearchByNameParams>,
-    ) -> String {
-        // Internal helper to reuse logic
-        match self.fetch_fields_internal().await {
-            Ok(fields) => {
-                let query = params.query.to_lowercase();
-                let results: Vec<_> = fields.into_iter()
-                    .filter(|f| f.name.to_lowercase().contains(&query))
-                    .collect();
-                serde_json::to_string(&results).unwrap_or_default()
-            }
-            Err(e) => e.to_string(),
-        }
-    }
-
-    #[rmcp::tool(
-        name = "issue_get_metadata",
-        description = r#"Get metadata for creating issues in a project. Returns available issue types and their required/optional fields."#
-    )]
-    async fn get_issue_metadata(
-        &self,
-        wrapper::Parameters(params): wrapper::Parameters<families::issue::IssueMetadataParams>,
-    ) -> String {
-        let url = "/rest/api/3/issue/createmeta";
-        let mut query = vec![("projectKeys", params.project_key)];
-
-        if let Some(expand) = params.expand {
-            query.push(("expand", expand));
-        }
-
-        if let Some(issue_type) = params.issue_type_name {
-            query.push(("issuetypeNames", issue_type));
-        }
-
-        match self.send_request::<families::metadata::CreateMeta, ()>(&url, Method::Get, Some(&query), None).await {
-            Ok(res) => serde_json::to_string(&res).unwrap_or_default(),
-            Err(e) => e.to_string(),
-        }
-    }
-
-    // =========================================================================
-    // ISSUE CONTENT (COMMENTS & WORKLOGS)
-    // =========================================================================
-
-    #[rmcp::tool(
-        name = "issue_content_manage",
-        description = "Manage issue comments and worklogs."
-    )]
-    async fn manage_content(
-        &self,
-        wrapper::Parameters(params): wrapper::Parameters<families::issue_content::IssueContentParams>,
-    ) -> String {
-        let result = match params.content_type.as_str() {
-            "comment" => self.handle_comment_operation(params).await,
-            "worklog" => self.handle_worklog_operation(params).await,
-            ct => Err(format!("Unknown contentType '{}'. Valid: comment, worklog", ct).into()),
-        };
-
-        match result {
-            Ok(res) => res,
-            Err(e) => e.to_string(),
-        }
-    }
-
-    #[rmcp::tool(
-        name = "issue_interact",
-        description = "Social interactions with issues (watch, vote)."
-    )]
-    async fn interact_issue(
-        &self,
-        wrapper::Parameters(params): wrapper::Parameters<families::issue_content::IssueSocialParams>,
-    ) -> String {
-        let result = match params.action.as_str() {
-            "watch" => {
-                let account_id = match params.account_id {
-                    Some(id) => id,
-                    None => return r#"{"error": "accountId required for watch"}"#.to_string(),
-                };
-                self.add_watcher_internal(&params.issue_id_or_key, &account_id).await
-            }
-            "unwatch" => {
-                let account_id = params.account_id.unwrap_or_default();
-                self.remove_watcher_internal(&params.issue_id_or_key, &account_id).await
-            }
-            "vote" => self.add_vote_internal(&params.issue_id_or_key).await,
-            action => Err(format!("Unknown action '{}'. Valid: watch, unwatch, vote", action).into()),
-        };
-
-        match result {
-            Ok(res) => res,
-            Err(e) => e.to_string(),
-        }
-    }
-
-    #[rmcp::tool(
-        name = "issue_relations_manage",
-        description = "Manage issue attachments and links."
-    )]
-    async fn manage_relations(
-        &self,
-        wrapper::Parameters(params): wrapper::Parameters<families::issue_relations::IssueRelationsParams>,
-    ) -> String {
-        let result = match params.relation_type.as_str() {
-            "attachment" => self.handle_attachment_operation(params).await,
-            "link" => self.handle_link_operation(params).await,
-            rt => Err(format!("Unknown relationType '{}'. Valid: attachment, link", rt).into()),
-        };
-
-        match result {
-            Ok(res) => res,
-            Err(e) => e.to_string(),
-        }
-    }
-
-    // =========================================================================
-    // AGILE OPERATIONS
-    // =========================================================================
-
-    #[rmcp::tool(
-        name = "agile_query",
-        description = "Query agile resources (boards, sprints, issues, backlog)."
-    )]
-    async fn query_agile(
-        &self,
-        wrapper::Parameters(params): wrapper::Parameters<families::agile::AgileQueryParams>,
-    ) -> String {
-        let resource = params.resource.clone();
-        let result = match resource {
-            families::agile::AgileQueryResource::Board => {
-                if let Some(board_id) = params.board_id {
-                    self.get_board_internal(board_id).await
-                } else {
-                    self.get_boards_internal(params).await
-                }
-            }
-            families::agile::AgileQueryResource::Sprint => {
-                if let Some(sprint_id) = params.sprint_id {
-                    self.get_sprint_internal(sprint_id).await
-                } else if let Some(board_id) = params.board_id {
-                    self.get_sprints_internal(board_id, params).await
-                } else {
-                    Err("boardId or sprintId required for sprint queries".into())
-                }
-            }
-            families::agile::AgileQueryResource::Issues => {
-                let board_id = match params.board_id {
-                    Some(id) => id,
-                    None => return r#"{"error": "boardId required for issues query"}"#.to_string(),
-                };
-                self.get_board_issues_internal(board_id, params).await
-            }
-            families::agile::AgileQueryResource::Backlog => {
-                let board_id = match params.board_id {
-                    Some(id) => id,
-                    None => return r#"{"error": "boardId required for backlog query"}"#.to_string(),
-                };
-                self.get_board_backlog_internal(board_id, params).await
-            }
-        };
-
-        match result {
-            Ok(res) => res,
-            Err(e) => e.to_string(),
-        }
-    }
-
-    #[rmcp::tool(
-        name = "agile_sprint_manage",
-        description = "Manage sprints (create, update, delete, start, close)."
-    )]
-    async fn manage_sprint(
-        &self,
-        wrapper::Parameters(params): wrapper::Parameters<families::agile::AgileSprintManageParams>,
-    ) -> String {
-        let result = match params.operation.as_str() {
-            "create" => {
-                let board_id = match params.board_id {
-                    Some(id) => id,
-                    None => return r#"{"error": "boardId required for create"}"#.to_string(),
-                };
-                let data = match params.data {
-                    Some(d) => d,
-                    None => return r#"{"error": "data required for create"}"#.to_string(),
-                };
-                self.create_sprint_internal(board_id, data).await
-            }
-            "update" | "start" | "close" => {
-                let sprint_id = match params.sprint_id {
-                    Some(id) => id,
-                    None => return r#"{"error": "sprintId required for update/start/close"}"#.to_string(),
-                };
-                let data = match params.data {
-                    Some(d) => d,
-                    None => return r#"{"error": "data required for update/start/close"}"#.to_string(),
-                };
-                self.update_sprint_internal(sprint_id, data).await
-            }
-            "delete" => {
-                let sprint_id = match params.sprint_id {
-                    Some(id) => id,
-                    None => return r#"{"error": "sprintId required for delete"}"#.to_string(),
-                };
-                self.delete_sprint_internal(sprint_id).await
-            }
-            op => Err(format!("Unknown operation '{}'. Valid: create, update, start, close, delete", op).into()),
-        };
-
-        match result {
-            Ok(res) => res,
-            Err(e) => e.to_string(),
-        }
-    }
-
-    #[rmcp::tool(
-        name = "agile_move_issues",
-        description = "Move issues to sprint or backlog."
-    )]
-    async fn move_issues(
-        &self,
-        wrapper::Parameters(params): wrapper::Parameters<families::agile::AgileMoveIssuesParams>,
-    ) -> String {
-        let result = match params.destination.as_str() {
-            "sprint" => {
-                let sprint_id = match params.destination_id {
-                    Some(id) => id,
-                    None => return r#"{"error": "destinationId required for sprint"}"#.to_string(),
-                };
-                self.move_to_sprint_internal(sprint_id, params.issues).await
-            }
-            "backlog" => self.move_to_backlog_internal(params.issues).await,
-            d => Err(format!("Unknown destination '{}'. Valid: sprint, backlog", d).into()),
-        };
-
-        match result {
-            Ok(res) => res,
-            Err(e) => e.to_string(),
-        }
-    }
-
-    #[rmcp::tool(
-        name = "agile_sprint_analyze",
-        description = "Analyze sprint metrics and health."
-    )]
-    async fn analyze_sprint(
-        &self,
-        wrapper::Parameters(params): wrapper::Parameters<families::agile::AgileSprintAnalyzeParams>,
-    ) -> String {
-        match self.analyze_sprint_internal(params).await {
-            Ok(res) => res,
-            Err(e) => e.to_string(),
-        }
-    }
-
-    // =========================================================================
-    // METADATA OPERATIONS
-    // =========================================================================
-
-    #[rmcp::tool(
-        name = "metadata_get_catalog",
-        description = "Get metadata catalogs (labels, priorities, resolutions, statuses, issue types)."
-    )]
-    async fn get_catalog(
-        &self,
-        wrapper::Parameters(params): wrapper::Parameters<families::metadata::MetadataCatalogParams>,
-    ) -> String {
-        let result = match params.catalog_type.as_str() {
-            "labels" => self.get_labels_internal(params).await,
-            "priorities" => self.get_priorities_internal().await,
-            "resolutions" => self.get_resolutions_internal().await,
-            "issueTypes" => {
-                if let Some(project_key) = params.project_key {
-                    self.get_issue_types_for_project_internal(project_key).await
-                } else {
-                    self.get_all_issue_types_internal().await
-                }
-            }
-            "statuses" => self.get_statuses_internal().await,
-            ct => Err(format!("Unknown catalogType '{}'. Valid: labels, priorities, resolutions, statuses, issueTypes", ct).into()),
-        };
-
-        match result {
-            Ok(res) => res,
-            Err(e) => e.to_string(),
-        }
-    }
-
-    #[rmcp::tool(
-        name = "field_discover",
-        description = "Discover fields and their configurations."
-    )]
-    async fn discover_fields(
-        &self,
-        wrapper::Parameters(params): wrapper::Parameters<families::metadata::FieldDiscoverParams>,
-    ) -> String {
-        let result = match params.scope.as_str() {
-            "global" => self.get_fields_internal(params).await,
-            "project" | "issueType" => {
-                let scope_id = match params.scope_id {
-                    Some(ref id) => id.clone(),
-                    None => return serde_json::json!({"error": "scopeId required for project/issueType scope"}).to_string(),
-                };
-                let _scope = params.scope.clone();
-                self.get_fields_for_scope_internal(params.scope.clone(), scope_id, params).await
-            }
-            s => Err(format!("Unknown scope '{}'. Valid: global, project, issueType", s).into()),
-        };
-
-        match result {
-            Ok(res) => res,
-            Err(e) => e.to_string(),
-        }
-    }
-
-    // =========================================================================
-    // PROJECT OPERATIONS
-    // =========================================================================
-
-    #[rmcp::tool(
-        name = "project_query",
-        description = "Query project resources."
-    )]
-    async fn query_project(
-        &self,
-        wrapper::Parameters(params): wrapper::Parameters<families::project::ProjectQueryParams>,
-    ) -> String {
-        let result = match params.resource.as_str() {
-            "project" => self.get_projects_internal(params).await,
-            "versions" | "components" | "roles" | "issueTypes" => {
-                let project_key = match params.project_key {
-                    Some(ref k) => k.clone(),
-                    None => return serde_json::json!({"error": "projectKey required"}).to_string(),
-                };
-                let resource = params.resource.clone();
-                self.get_project_resource_internal(resource, project_key, params).await
-            }
-            r => Err(format!("Unknown resource '{}'. Valid: project, versions, components, roles, issueTypes", r).into()),
-        };
-
-        match result {
-            Ok(res) => res,
-            Err(e) => e.to_string(),
-        }
-    }
-
-    #[rmcp::tool(
-        name = "project_manage",
-        description = "Manage project versions and components."
-    )]
-    async fn manage_project(
-        &self,
-        wrapper::Parameters(params): wrapper::Parameters<families::project::ProjectManageParams>,
-    ) -> String {
-        let result = match params.operation.as_str() {
-            "create" => {
-                let data = match params.data {
-                    Some(d) => d,
-                    None => return r#"{"error": "data required for create"}"#.to_string(),
-                };
-                match params.resource.as_str() {
-                    "version" => self.create_version_internal(params.project_key, data).await,
-                    "component" => self.create_component_internal(params.project_key, data).await,
-                    r => Err(format!("Unknown resource '{}'. Valid: version, component", r).into()),
-                }
-            }
-            op => Err(format!("Operation '{}' not yet implemented", op).into()),
-        };
-
-        match result {
-            Ok(res) => res,
-            Err(e) => e.to_string(),
-        }
-    }
-
-    // =========================================================================
-    // SEARCH & JQL
-    // =========================================================================
-
-    #[rmcp::tool(
-        name = "search_execute_jql",
-        description = "Execute JQL search query."
-    )]
-    async fn execute_jql(
-        &self,
-        wrapper::Parameters(params): wrapper::Parameters<families::jql::SearchParams>,
-    ) -> String {
-        let url = "/rest/api/3/search/jql";
-        match self.send_request::<families::issue::SearchResults, _>(&url, Method::Post, None, Some(&params)).await {
-            Ok(res) => serde_json::to_string(&res).unwrap_or_default(),
-            Err(e) => e.to_string(),
-        }
-    }
-
-    #[rmcp::tool(
-        name = "jql_parse",
-        description = "Parse and validate JQL queries."
-    )]
-    async fn parse_jql(
-        &self,
-        wrapper::Parameters(params): wrapper::Parameters<families::jql::ParseJqlQueryParams>,
-    ) -> String {
-        let url = "/rest/api/3/jql/parse";
-        let query = vec![("validation", "strict".to_string())];
-        match self.send_request::<families::jql::ParsedJqlQueries, _>(&url, Method::Post, Some(&query), Some(&params)).await {
-            Ok(res) => serde_json::to_string(&res).unwrap_or_default(),
-            Err(e) => e.to_string(),
-        }
-    }
-
-    // =========================================================================
-    // USER OPERATIONS
-    // =========================================================================
-
-    #[rmcp::tool(
-        name = "user_search",
-        description = "Search for users."
-    )]
-    async fn search_user(
-        &self,
-        wrapper::Parameters(params): wrapper::Parameters<families::user::SearchUsersParams>,
-    ) -> String {
-        let url = "/rest/api/3/user/search";
-        let mut query = vec![("query", params.query)];
-        if let Some(start_at) = params.start_at {
-            query.push(("startAt", start_at.to_string()));
-        }
-        if let Some(max_results) = params.max_results {
-            query.push(("maxResults", max_results.to_string()));
-        }
-        if let Some(active) = params.include_active {
-            query.push(("includeActive", active.to_string()));
-        }
-        if let Some(inactive) = params.include_inactive {
-            query.push(("includeInactive", inactive.to_string()));
-        }
-
-        match self.send_request::<Vec<families::user::User>, ()>(&url, Method::Get, Some(&query), None).await {
-            Ok(res) => serde_json::to_string(&res).unwrap_or_default(),
-            Err(e) => e.to_string(),
-        }
-    }
-
-    #[rmcp::tool(
-        name = "user_get_myself",
-        description = "Get current user details."
-    )]
-    async fn get_myself(
-        &self,
-        wrapper::Parameters(params): wrapper::Parameters<families::user::GetMyselfParams>,
-    ) -> String {
-        let url = "/rest/api/3/myself";
-        let mut query = Vec::new();
-        if let Some(expand) = params.expand {
-            query.push(("expand", expand));
-        }
-
-        match self.send_request::<families::user::User, ()>(&url, Method::Get, Some(&query), None).await {
-            Ok(res) => serde_json::to_string(&res).unwrap_or_default(),
-            Err(e) => e.to_string(),
-        }
-    }
-
-    // =========================================================================
-    // HELPER TOOLS
-    // =========================================================================
-
-    #[rmcp::tool(
-        name = "text_to_adf",
-        description = "Convert plain text to Atlassian Document Format (ADF)."
-    )]
-    async fn convert_to_adf(
-        &self,
-        wrapper::Parameters(params): wrapper::Parameters<families::helpers::TextToAdfParams>,
-    ) -> String {
-        let adf = families::helpers::text_to_adf(&params.text, params.style);
-        let response = families::helpers::AdfDocument { adf };
-        serde_json::to_string(&response).unwrap_or_default()
-    }
-
-    // =========================================================================
-    // HELPER INTERNAL METHODS
-    // =========================================================================
-
-    async fn fetch_fields_internal(&self) -> Result<Vec<families::metadata::Field>, Box<dyn std::error::Error + Send + Sync>> {
-        let url = "/rest/api/3/field";
-        self.send_request::<Vec<families::metadata::Field>, ()>(&url, Method::Get, None, None).await
-    }
-
-    async fn handle_comment_operation(
-        &self,
-        params: families::issue_content::IssueContentParams,
-    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        match params.operation.as_str() {
-            "add" => {
-                let data = params.data.ok_or("data required for add")?;
-                let payload: families::issue_content::CommentData = serde_json::from_value(data.0)?;
-                let url = format!("/rest/api/3/issue/{}/comment", params.issue_id_or_key);
-                let response = self.send_request::<families::issue_content::Comment, _>(&url, Method::Post, None, Some(&payload)).await?;
-                Ok(serde_json::to_string(&response)?)
-            }
-            "update" => {
-                let content_id = params.content_id.ok_or("contentId required for update")?;
-                let data = params.data.ok_or("data required for update")?;
-                let payload: families::issue_content::CommentData = serde_json::from_value(data.0)?;
-                let url = format!("/rest/api/3/issue/{}/comment/{}", params.issue_id_or_key, content_id);
-                let response = self.send_request::<families::issue_content::Comment, _>(&url, Method::Put, None, Some(&payload)).await?;
-                Ok(serde_json::to_string(&response)?)
-            }
-            "delete" => {
-                let content_id = params.content_id.ok_or("contentId required for delete")?;
-                let url = format!("/rest/api/3/issue/{}/comment/{}", params.issue_id_or_key, content_id);
-                self.send_request::<serde_json::Value, ()>(&url, Method::Delete, None, None).await?;
-                Ok(r#"{"success": true, "message": "Comment deleted successfully"}"#.to_string())
-            }
-            "get" => {
-                let url = format!("/rest/api/3/issue/{}/comment", params.issue_id_or_key);
-                let response = self.send_request::<families::issue_content::CommentsPage, ()>(&url, Method::Get, None, None).await?;
-                Ok(serde_json::to_string(&response)?)
-            }
-            op => Err(format!("Unknown operation '{}'. Valid: add, update, delete, get", op).into()),
-        }
-    }
-
-    async fn handle_worklog_operation(
-        &self,
-        params: families::issue_content::IssueContentParams,
-    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        match params.operation.as_str() {
-            "add" => {
-                let data = params.data.ok_or("data required for add")?;
-                let payload: families::issue_content::WorklogData = serde_json::from_value(data.0)?;
-                let url = format!("/rest/api/3/issue/{}/worklog", params.issue_id_or_key);
-                let response = self.send_request::<families::issue_content::Worklog, _>(&url, Method::Post, None, Some(&payload)).await?;
-                Ok(serde_json::to_string(&response)?)
-            }
-            "update" => {
-                let content_id = params.content_id.ok_or("contentId required for update")?;
-                let data = params.data.ok_or("data required for update")?;
-                let payload: families::issue_content::WorklogData = serde_json::from_value(data.0)?;
-                let url = format!("/rest/api/3/issue/{}/worklog/{}", params.issue_id_or_key, content_id);
-                let response = self.send_request::<families::issue_content::Worklog, _>(&url, Method::Put, None, Some(&payload)).await?;
-                Ok(serde_json::to_string(&response)?)
-            }
-            "delete" => {
-                let content_id = params.content_id.ok_or("contentId required for delete")?;
-                let url = format!("/rest/api/3/issue/{}/worklog/{}", params.issue_id_or_key, content_id);
-                self.send_request::<serde_json::Value, ()>(&url, Method::Delete, None, None).await?;
-                Ok(r#"{"success": true, "message": "Worklog deleted successfully"}"#.to_string())
-            }
-            "get" => {
-                let url = format!("/rest/api/3/issue/{}/worklog", params.issue_id_or_key);
-                let response = self.send_request::<families::issue_content::WorklogsPage, ()>(&url, Method::Get, None, None).await?;
-                Ok(serde_json::to_string(&response)?)
-            }
-            op => Err(format!("Unknown operation '{}'. Valid: add, update, delete, get", op).into()),
-        }
-    }
-
-    async fn add_watcher_internal(
-        &self,
-        issue_key: &str,
-        account_id: &str,
-    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        let url = format!("/rest/api/3/issue/{}/watchers", issue_key);
-        self.send_request::<serde_json::Value, _>(&url, Method::Post, None, Some(&account_id)).await?;
-        Ok(r#"{"success": true, "message": "Watcher added successfully"}"#.to_string())
-    }
-
-    async fn remove_watcher_internal(
-        &self,
-        issue_key: &str,
-        account_id: &str,
-    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        let url = format!("/rest/api/3/issue/{}/watchers", issue_key);
-        let query = vec![("accountId", account_id.to_string())];
-        self.send_request::<serde_json::Value, ()>(&url, Method::Delete, Some(&query), None).await?;
-        Ok(r#"{"success": true, "message": "Watcher removed successfully"}"#.to_string())
-    }
-
-    async fn add_vote_internal(
-        &self,
-        issue_key: &str,
-    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        let url = format!("/rest/api/3/issue/{}/votes", issue_key);
-        self.send_request::<serde_json::Value, ()>(&url, Method::Post, None, None).await?;
-        Ok(r#"{"success": true, "message": "Vote added successfully"}"#.to_string())
-    }
-
-    async fn handle_attachment_operation(
-        &self,
-        params: families::issue_relations::IssueRelationsParams,
-    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        match params.operation.as_str() {
-            "get" => {
-                let url = format!("/rest/api/3/issue/{}/attachments", params.issue_id_or_key);
-                let response = self.send_request::<Vec<families::issue_relations::Attachment>, ()>(&url, Method::Get, None, None).await?;
-                Ok(serde_json::to_string(&response)?)
-            }
-            "delete" => {
-                let relation_id = params.relation_id.ok_or("relationId required for delete")?;
-                let url = format!("/rest/api/3/attachment/{}", relation_id);
-                self.send_request::<serde_json::Value, ()>(&url, Method::Delete, None, None).await?;
-                Ok(r#"{"success": true, "message": "Attachment deleted successfully"}"#.to_string())
-            }
-            op => Err(format!("Unknown operation '{}'. Valid: get, delete. Note: upload not supported via MCP", op).into()),
-        }
-    }
-
-    async fn handle_link_operation(
-        &self,
-        params: families::issue_relations::IssueRelationsParams,
-    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        match params.operation.as_str() {
-            "create" => {
-                let data = params.data.ok_or("data required for create")?;
-                let payload: families::issue_relations::CreateIssueLinkData = serde_json::from_value(data.0)?;
-                let url = "/rest/api/3/issueLink";
-                self.send_request::<serde_json::Value, _>(&url, Method::Post, None, Some(&payload)).await?;
-                Ok(r#"{"success": true, "message": "Issue link created successfully"}"#.to_string())
-            }
-            "delete" => {
-                let relation_id = params.relation_id.ok_or("relationId required for delete")?;
-                let url = format!("/rest/api/3/issueLink/{}", relation_id);
-                self.send_request::<serde_json::Value, ()>(&url, Method::Delete, None, None).await?;
-                Ok(r#"{"success": true, "message": "Issue link deleted successfully"}"#.to_string())
-            }
-            op => Err(format!("Unknown operation '{}'. Valid: create, delete", op).into()),
-        }
-    }
-
-    async fn get_board_internal(
-        &self,
-        board_id: i64,
-    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        let url = format!("/rest/agile/1.0/board/{}", board_id);
-        let response = self.send_request::<families::agile::Board, ()>(&url, Method::Get, None, None).await?;
-        Ok(serde_json::to_string(&response)?)
-    }
-
-    async fn get_boards_internal(
-        &self,
-        params: families::agile::AgileQueryParams,
-    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        let url = "/rest/agile/1.0/board";
-        let mut query = Vec::new();
-
-        if let Some(start_at) = params.start_at {
-            query.push(("startAt", start_at.to_string()));
-        }
-        if let Some(max_results) = params.max_results {
-            query.push(("maxResults", max_results.to_string()));
-        }
-
-        if let Some(filters) = params.filters {
-            let board_filters: families::agile::BoardFilters = serde_json::from_value(filters.0)?;
-            if let Some(type_) = board_filters.r#type {
-                query.push(("type", type_));
-            }
-            if let Some(name) = board_filters.name {
-                query.push(("name", name));
-            }
-            if let Some(project) = board_filters.project_key_or_id {
-                query.push(("projectKeyOrId", project));
-            }
-        }
-
-        let response = self.send_request::<families::agile::PageBeanBoard, ()>(&url, Method::Get, Some(&query), None).await?;
-        Ok(serde_json::to_string(&response)?)
-    }
-
-    async fn get_sprint_internal(
-        &self,
-        sprint_id: i64,
-    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        let url = format!("/rest/agile/1.0/sprint/{}", sprint_id);
-        let response = self.send_request::<families::agile::Sprint, ()>(&url, Method::Get, None, None).await?;
-        Ok(serde_json::to_string(&response)?)
-    }
-
-    async fn get_sprints_internal(
-        &self,
-        board_id: i64,
-        params: families::agile::AgileQueryParams,
-    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        let url = format!("/rest/agile/1.0/board/{}/sprint", board_id);
-        let mut query = Vec::new();
-
-        if let Some(start_at) = params.start_at {
-            query.push(("startAt", start_at.to_string()));
-        }
-        if let Some(max_results) = params.max_results {
-            query.push(("maxResults", max_results.to_string()));
-        }
-
-        if let Some(filters) = params.filters {
-            let sprint_filters: families::agile::SprintFilters = serde_json::from_value(filters.0)?;
-            if let Some(state) = sprint_filters.state {
-                query.push(("state", state));
-            }
-        }
-
-        let response = self.send_request::<families::agile::PageBeanSprint, ()>(&url, Method::Get, Some(&query), None).await?;
-        Ok(serde_json::to_string(&response)?)
-    }
-
-    async fn create_sprint_internal(
-        &self,
-        board_id: i64,
-        data: families::JsonValue,
-    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        let mut sprint_data: families::agile::SprintData = serde_json::from_value(data.0)?;
-        sprint_data.origin_board_id = Some(board_id);
-
-        let url = "/rest/agile/1.0/sprint";
-        let response = self.send_request::<families::agile::Sprint, _>(&url, Method::Post, None, Some(&sprint_data)).await?;
-        Ok(serde_json::to_string(&response)?)
-    }
-
-    async fn update_sprint_internal(
-        &self,
-        sprint_id: i64,
-        data: families::JsonValue,
-    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        let sprint_data: families::agile::SprintData = serde_json::from_value(data.0)?;
-        let url = format!("/rest/agile/1.0/sprint/{}", sprint_id);
-        let response = self.send_request::<families::agile::Sprint, _>(&url, Method::Put, None, Some(&sprint_data)).await?;
-        Ok(serde_json::to_string(&response)?)
-    }
-
-    async fn delete_sprint_internal(
-        &self,
-        sprint_id: i64,
-    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        let url = format!("/rest/agile/1.0/sprint/{}", sprint_id);
-        self.send_request::<serde_json::Value, ()>(&url, Method::Delete, None, None).await?;
-        Ok(r#"{"success": true, "message": "Sprint deleted successfully"}"#.to_string())
-    }
-
-    async fn get_board_issues_internal(
-        &self,
-        board_id: i64,
-        params: families::agile::AgileQueryParams,
-    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        let url = format!("/rest/agile/1.0/board/{}/issue", board_id);
-        let mut query = Vec::new();
-
-        if let Some(start_at) = params.start_at {
-            query.push(("startAt", start_at.to_string()));
-        }
-        if let Some(max_results) = params.max_results {
-            query.push(("maxResults", max_results.to_string()));
-        }
-
-        if let Some(filters) = params.filters {
-            let issue_filters: families::agile::IssuesFilters = serde_json::from_value(filters.0)?;
-            if let Some(jql) = issue_filters.jql {
-                query.push(("jql", jql));
-            }
-            if let Some(fields) = issue_filters.fields {
-                query.push(("fields", fields.join(",")));
-            }
-        }
-
-        let response = self.send_request::<families::agile::PageBeanIssue, ()>(&url, Method::Get, Some(&query), None).await?;
-        Ok(serde_json::to_string(&response)?)
-    }
-
-    async fn get_board_backlog_internal(
-        &self,
-        board_id: i64,
-        params: families::agile::AgileQueryParams,
-    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        let url = format!("/rest/agile/1.0/board/{}/backlog", board_id);
-        let mut query = Vec::new();
-
-        if let Some(start_at) = params.start_at {
-            query.push(("startAt", start_at.to_string()));
-        }
-        if let Some(max_results) = params.max_results {
-            query.push(("maxResults", max_results.to_string()));
-        }
-
-        if let Some(filters) = params.filters {
-            let issue_filters: families::agile::IssuesFilters = serde_json::from_value(filters.0)?;
-            if let Some(jql) = issue_filters.jql {
-                query.push(("jql", jql));
-            }
-        }
-
-        let response = self.send_request::<families::agile::PageBeanIssue, ()>(&url, Method::Get, Some(&query), None).await?;
-        Ok(serde_json::to_string(&response)?)
-    }
-
-    async fn move_to_sprint_internal(
-        &self,
-        sprint_id: i64,
-        issues: Vec<String>,
-    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        let url = format!("/rest/agile/1.0/sprint/{}/issue", sprint_id);
-
-        #[derive(Serialize)]
-        struct Body {
-            issues: Vec<String>,
-        }
-
-        let body = Body { issues };
-        self.send_request::<serde_json::Value, _>(&url, Method::Post, None, Some(&body)).await?;
-        Ok(r#"{"success": true, "message": "Issues moved to sprint successfully"}"#.to_string())
-    }
-
-    async fn move_to_backlog_internal(
-        &self,
-        issues: Vec<String>,
-    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        let url = "/rest/agile/1.0/backlog/issue";
-
-        #[derive(Serialize)]
-        struct Body {
-            issues: Vec<String>,
-        }
-
-        let body = Body { issues };
-        self.send_request::<serde_json::Value, _>(&url, Method::Post, None, Some(&body)).await?;
-        Ok(r#"{"success": true, "message": "Issues moved to backlog successfully"}"#.to_string())
-    }
-
-    async fn analyze_sprint_internal(
-        &self,
-        params: families::agile::AgileSprintAnalyzeParams,
-    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        let sprint_id = if let Some(id) = params.sprint_id {
-            id
-        } else if let Some(board_id) = params.board_id {
-            let sprints_url = format!("/rest/agile/1.0/board/{}/sprint", board_id);
-            let query = vec![("state", "active".to_string())];
-            let sprints = self.send_request::<families::agile::PageBeanSprint, ()>(&sprints_url, Method::Get, Some(&query), None).await?;
-            sprints.values.first().ok_or("No active sprint found")?.id
-        } else {
-            return Err("Either sprintId or boardId is required".into());
-        };
-
-        let sprint = self.get_sprint_internal(sprint_id).await?;
-        let sprint_obj: families::agile::Sprint = serde_json::from_str(&sprint)?;
-
-        let metrics = params.metrics.unwrap_or_else(|| vec!["velocity".to_string(), "unestimated".to_string()]);
-        
-        // Dynamic Story Points Field Discovery
-        let story_points_field_id = if metrics.contains(&"velocity".to_string()) 
-            || metrics.contains(&"completion".to_string()) 
-            || metrics.contains(&"unestimated".to_string()) {
-            self.find_story_points_field_id().await?
-        } else {
-            "customfield_10016".to_string()
-        };
-
-        let issues_url = format!("/rest/agile/1.0/sprint/{}/issue", sprint_id);
-        
-        // Ensure we request the story points field explicitly
-        let fields_param = format!("summary,status,{}", story_points_field_id);
-        let query = vec![("fields", fields_param)];
-        
-        let issues_response = self.send_request::<families::agile::PageBeanIssue, ()>(&issues_url, Method::Get, Some(&query), None).await?;
-
-        let mut analysis = families::agile::SprintAnalysis {
-            sprint_id,
-            sprint_name: sprint_obj.name,
-            sprint_state: sprint_obj.state,
-            velocity: None,
-            unestimated_issues: None,
-            blocked_issues: None,
-            total_points: None,
-            completed_points: None,
-            completion_percentage: None,
-        };
-
-        if metrics.contains(&"velocity".to_string()) || metrics.contains(&"completion".to_string()) {
-            let mut total_points = 0.0;
-            let mut completed_points = 0.0;
-
-            for issue in &issues_response.issues {
-                if let Some(story_points) = issue.fields.get(&story_points_field_id) {
-                    if let Some(points) = story_points.as_f64() {
-                        total_points += points;
-                        if let Some(status) = issue.fields.get("status") {
-                            if let Some(status_obj) = status.as_object() {
-                                if let Some(name) = status_obj.get("name").and_then(|n| n.as_str()) {
-                                    if name == "Done" || name == "Closed" {
-                                        completed_points += points;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            if metrics.contains(&"velocity".to_string()) {
-                analysis.velocity = Some(completed_points);
-            }
-            if metrics.contains(&"completion".to_string()) {
-                analysis.total_points = Some(total_points);
-                analysis.completed_points = Some(completed_points);
-                if total_points > 0.0 {
-                    analysis.completion_percentage = Some((completed_points / total_points) * 100.0);
-                }
-            }
-        }
-
-        if metrics.contains(&"unestimated".to_string()) {
-            let unestimated: Vec<String> = issues_response.issues.iter()
-                .filter(|issue| issue.fields.get(&story_points_field_id).and_then(|v| v.as_f64()).is_none())
-                .map(|issue| issue.key.clone())
-                .collect();
-            if !unestimated.is_empty() {
-                analysis.unestimated_issues = Some(unestimated);
-            }
-        }
-
-        if metrics.contains(&"blocked".to_string()) {
-            let blocked: Vec<String> = issues_response.issues.iter()
-                .filter(|issue| {
-                    issue.fields.get("status")
-                        .and_then(|s| s.as_object())
-                        .and_then(|o| o.get("name"))
-                        .and_then(|n| n.as_str())
-                        .map(|name| name.to_lowercase().contains("blocked"))
-                        .unwrap_or(false)
-                })
-                .map(|issue| issue.key.clone())
-                .collect();
-            if !blocked.is_empty() {
-                analysis.blocked_issues = Some(blocked);
-            }
-        }
-
-        Ok(serde_json::to_string(&analysis)?)
-    }
-
-    // =========================================================================
-    // METADATA INTERNAL HANDLERS
-    // =========================================================================
-
-    async fn get_labels_internal(
-        &self,
-        params: families::metadata::MetadataCatalogParams,
-    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        let url = "/rest/api/3/label";
-        let mut query = Vec::new();
-        if let Some(start_at) = params.start_at {
-            query.push(("startAt", start_at.to_string()));
-        }
-        if let Some(max_results) = params.max_results {
-            query.push(("maxResults", max_results.to_string()));
-        }
-
-        let response = self.send_request::<families::metadata::LabelsPage, ()>(&url, Method::Get, Some(&query), None).await?;
-        Ok(serde_json::to_string(&response)?)
-    }
-
-    async fn get_priorities_internal(&self) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        let url = "/rest/api/3/priority";
-        let response = self.send_request::<Vec<families::metadata::Priority>, ()>(&url, Method::Get, None, None).await?;
-        Ok(serde_json::to_string(&response)?)
-    }
-
-    async fn get_resolutions_internal(&self) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        let url = "/rest/api/3/resolution";
-        let response = self.send_request::<Vec<families::metadata::Resolution>, ()>(&url, Method::Get, None, None).await?;
-        Ok(serde_json::to_string(&response)?)
-    }
-
-    async fn get_issue_types_for_project_internal(
-        &self,
-        project_key: String,
-    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        let url = format!("/rest/api/3/project/{}", project_key);
-        let response = self.send_request::<serde_json::Value, ()>(&url, Method::Get, None, None).await?;
-
-        if let Some(issue_types) = response.get("issueTypes") {
-            Ok(serde_json::to_string(issue_types)?)
-        } else {
-            Ok("[]".to_string())
-        }
-    }
-
-    async fn get_all_issue_types_internal(&self) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        let url = "/rest/api/3/issuetype";
-        let response = self.send_request::<Vec<families::metadata::IssueType>, ()>(&url, Method::Get, None, None).await?;
-        Ok(serde_json::to_string(&response)?)
-    }
-
-    async fn get_statuses_internal(&self) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        let url = "/rest/api/3/status";
-        let response = self.send_request::<Vec<families::metadata::Status>, ()>(&url, Method::Get, None, None).await?;
-        Ok(serde_json::to_string(&response)?)
-    }
-
-    async fn find_story_points_field_id(&self) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        let fields = self.fetch_fields_internal().await?;
-        let candidates = ["Story Points", "Story point estimate"];
-
-        for field in fields {
-            if candidates.iter().any(|&c| field.name.eq_ignore_ascii_case(c)) {
-                return Ok(field.id);
-            }
-        }
-
-        Ok("customfield_10016".to_string())
-    }
-
-    async fn get_fields_internal(
-        &self,
-        params: families::metadata::FieldDiscoverParams,
-    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        let mut all_fields = self.fetch_fields_internal().await?;
-
-        if let Some(field_type) = params.field_type {
-            all_fields.retain(|f| {
-                let is_custom = f.custom.unwrap_or(false);
-                match field_type.as_str() {
-                    "custom" => is_custom,
-                    "system" => !is_custom,
-                    _ => true,
-                }
-            });
-        }
-
-        if let Some(search_term) = params.search_term {
-            let search_lower = search_term.to_lowercase();
-            all_fields.retain(|f| {
-                f.name.to_lowercase().contains(&search_lower)
-                    || f.id.to_lowercase().contains(&search_lower)
-            });
-        }
-
-        Ok(serde_json::to_string(&all_fields)?)
-    }
-
-    async fn get_fields_for_scope_internal(
-        &self,
-        scope: String,
-        scope_id: String,
-        _params: families::metadata::FieldDiscoverParams,
-    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        let url = match scope.as_str() {
-            "project" => format!("/rest/api/3/issue/createmeta?projectKeys={}&expand=projects.issuetypes.fields", scope_id),
-            _ => return self.get_fields_internal(_params).await,
-        };
-
-        let response = self.send_request::<serde_json::Value, ()>(&url, Method::Get, None, None).await?;
-        Ok(serde_json::to_string(&response)?)
-    }
-
-    // =========================================================================
-    // PROJECT INTERNAL HANDLERS
-    // =========================================================================
-
-    async fn get_projects_internal(
-        &self,
-        params: families::project::ProjectQueryParams,
-    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        let url = "/rest/api/3/project/search";
-        let mut query = Vec::new();
-
-        if let Some(start_at) = params.start_at {
-            query.push(("startAt", start_at.to_string()));
-        }
-        if let Some(max_results) = params.max_results {
-            query.push(("maxResults", max_results.to_string()));
-        }
-
-        let response = self.send_request::<families::project::ProjectsPage, ()>(&url, Method::Get, Some(&query), None).await?;
-        Ok(serde_json::to_string(&response)?)
-    }
-
-    async fn get_project_resource_internal(
-        &self,
-        resource: String,
-        project_key: String,
-        _params: families::project::ProjectQueryParams,
-    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        let url = match resource.as_str() {
-            "versions" => format!("/rest/api/3/project/{}/versions", project_key),
-            "components" => format!("/rest/api/3/project/{}/components", project_key),
-            "roles" => format!("/rest/api/3/project/{}/role", project_key),
-            "issueTypes" => format!("/rest/api/3/project/{}", project_key),
-            _ => return Err(format!("Unknown resource '{}'", resource).into()),
-        };
-
-        let response = self.send_request::<serde_json::Value, ()>(&url, Method::Get, None, None).await?;
-
-        if resource == "issueTypes" {
-            if let Some(types) = response.get("issueTypes") {
-                return Ok(serde_json::to_string(types)?);
-            }
-        }
-
-        Ok(serde_json::to_string(&response)?)
-    }
-
-    async fn create_version_internal(
-        &self,
-        project_key: String,
-        data: families::JsonValue,
-    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        let mut version_data: families::project::VersionData = serde_json::from_value(data.0)?;
-        version_data.project = Some(project_key);
-
-        let url = "/rest/api/3/version";
-        let response = self.send_request::<families::project::Version, _>(&url, Method::Post, None, Some(&version_data)).await?;
-        Ok(serde_json::to_string(&response)?)
-    }
-
-    async fn create_component_internal(
-        &self,
-        project_key: String,
-        data: families::JsonValue,
-    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        let mut component_data: families::project::ComponentData = serde_json::from_value(data.0)?;
-        component_data.project = Some(project_key);
-
-        let url = "/rest/api/3/component";
-        let response = self.send_request::<families::project::Component, _>(&url, Method::Post, None, Some(&component_data)).await?;
-        Ok(serde_json::to_string(&response)?)
-    }
-
+    /// =========================================================================
+    /// HELPERS
+    /// =========================================================================
     async fn send_request<T, B>(
         &self,
         url: &str,
@@ -1455,7 +63,12 @@ impl Jira {
         T: serde::de::DeserializeOwned,
         B: serde::Serialize,
     {
-        let full_url = format!("{}{}", self.base_url(), url);
+        let full_url = if url.starts_with("http") {
+            url.to_string()
+        } else {
+            format!("{}{}", self.base_url(), url)
+        };
+
         let mut req_builder = match method {
             Method::Get => self.client.get(&full_url),
             Method::Post => self.client.post(&full_url),
@@ -1489,6 +102,874 @@ impl Jira {
         }
 
         serde_json::from_str::<T>(&res_text).map_err(|e| e.into())
+    }
+
+    async fn find_field_id(&self, name: &str) -> Option<String> {
+        let url = "/rest/api/3/field";
+        let fields: Vec<serde_json::Value> = self
+            .send_request::<Vec<serde_json::Value>, ()>(url, Method::Get, None, None::<&()>)
+            .await
+            .ok()?;
+        for field in fields {
+            if let Some(field_name) = field.get("name").and_then(|n| n.as_str()) {
+                if field_name.eq_ignore_ascii_case(name) {
+                    return field
+                        .get("id")
+                        .and_then(|id| id.as_str())
+                        .map(|s| s.to_string());
+                }
+            }
+        }
+        None
+    }
+
+    async fn resolve_issue_type_id(
+        &self,
+        project_key: &str,
+        issue_type: domains::enums::IssueType,
+    ) -> Option<(String, bool)> {
+        let url = format!(
+            "/rest/api/3/issue/createmeta?projectKeys={}&expand=projects.issuetypes",
+            project_key
+        );
+        let meta: serde_json::Value = self
+            .send_request::<serde_json::Value, ()>(&url, Method::Get, None, None::<&()>)
+            .await
+            .ok()?;
+
+        let projects = meta.get("projects")?.as_array()?;
+        let project = projects
+            .iter()
+            .find(|p| p.get("key").and_then(|k| k.as_str()).unwrap_or("") == project_key)?;
+
+        let types = project.get("issuetypes")?.as_array()?;
+        let target = issue_type.to_string();
+
+        for t in types {
+            let name = t.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            let untranslated = t
+                .get("untranslatedName")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if name.eq_ignore_ascii_case(&target) || untranslated.eq_ignore_ascii_case(&target) {
+                let id = t.get("id").and_then(|v| v.as_str())?.to_string();
+                let is_subtask = t.get("subtask").and_then(|v| v.as_bool()).unwrap_or(false);
+                return Some((id, is_subtask));
+            }
+        }
+
+        None
+    }
+
+    async fn find_transition_id(
+        &self,
+        issue_key: &str,
+        target_status: domains::enums::Status,
+    ) -> Option<String> {
+        let url = format!("/rest/api/3/issue/{}/transitions", issue_key);
+        let resp: domains::issue::TransitionResponse = self
+            .send_request::<_, ()>(&url, Method::Get, None, None::<&()>)
+            .await
+            .ok()?;
+
+        let target_name = target_status.to_string(); // e.g. "In Progress"
+
+        for transition in &resp.transitions {
+            if transition.name.eq_ignore_ascii_case(&target_name) {
+                return Some(transition.id.clone());
+            }
+            if transition.to.name.eq_ignore_ascii_case(&target_name) {
+                return Some(transition.id.clone());
+            }
+        }
+
+        let target_category = match target_status {
+            domains::enums::Status::ToDo => "new",
+            domains::enums::Status::InProgress | domains::enums::Status::InReview => {
+                "indeterminate"
+            }
+            domains::enums::Status::Done | domains::enums::Status::Cancelled => "done",
+            domains::enums::Status::Blocked => "indeterminate",
+        };
+
+        for transition in &resp.transitions {
+            if let Some(cat) = &transition.to.status_category {
+                if cat.key.eq_ignore_ascii_case(target_category) {
+                    return Some(transition.id.clone());
+                }
+            }
+        }
+
+        None
+    }
+
+    async fn resolve_assignee(&self, assignee: &str) -> Option<String> {
+        if assignee.eq_ignore_ascii_case("me") {
+            let resp: domains::user::User = self
+                .send_request::<_, ()>("/rest/api/3/myself", Method::Get, None, None::<&()>)
+                .await
+                .ok()?;
+            return Some(resp.account_id);
+        }
+        if assignee.eq_ignore_ascii_case("unassigned") {
+            return Some("".to_string());
+        }
+        Some(assignee.to_string())
+    }
+
+    /// =========================================================================
+    /// PHASE 1: Creation Domain
+    /// =========================================================================
+
+    #[rmcp::tool(
+        name = "issue_create",
+        description = "Creates an issue in Jira. Use this tool to create Stories, Bugs, Epics, Tasks, and Sub-tasks. It handles complex fields like ADF, priority IDs, and Epic linking automatically."
+    )]
+    async fn issue_create(
+        &self,
+        wrapper::Parameters(params): wrapper::Parameters<domains::issue::IssueCreateArgs>,
+    ) -> String {
+        let url = "/rest/api/3/issue";
+        let mut fields = HashMap::new();
+
+        fields.insert(
+            "project".to_string(),
+            serde_json::json!({ "key": params.project_key }),
+        );
+
+        let (issue_type_id, _is_subtask) = match self
+            .resolve_issue_type_id(&params.project_key, params.issue_type)
+            .await
+        {
+            Some(res) => res,
+            None => {
+                return format!(
+                    r#"{{"error": "Could not find valid issue type ID for '{}' in project {}\n"}}"#, // Added newline for clarity
+                    params.issue_type, params.project_key
+                );
+            }
+        };
+        fields.insert(
+            "issuetype".to_string(),
+            serde_json::json!({ "id": issue_type_id }),
+        );
+
+        fields.insert("summary".to_string(), serde_json::json!(params.summary));
+
+        if let Some(desc) = params.description {
+            fields.insert(
+                "description".to_string(),
+                domains::helpers::text_to_adf(&desc, domains::helpers::AdfStyle::Paragraph).0,
+            );
+        }
+
+        if let Some(priority) = params.priority {
+            fields.insert(
+                "priority".to_string(),
+                serde_json::json!({ "name": priority }),
+            );
+        }
+
+        if let Some(parent) = params.parent_key {
+            fields.insert("parent".to_string(), serde_json::json!({ "key": parent }));
+        }
+
+        if let Some(labels) = params.labels {
+            fields.insert("labels".to_string(), serde_json::json!(labels));
+        }
+
+        if let Some(components) = params.components {
+            let comps: Vec<_> = components
+                .into_iter()
+                .map(|c| serde_json::json!({ "name": c }))
+                .collect();
+            fields.insert("components".to_string(), serde_json::json!(comps));
+        }
+
+        if let Some(sp) = params.story_points {
+            if let Some(sp_field) = self.find_field_id("Story Points").await {
+                fields.insert(sp_field, serde_json::json!(sp));
+            } else if let Some(sp_field) = self.find_field_id("Story point estimate").await {
+                fields.insert(sp_field, serde_json::json!(sp));
+            }
+        }
+
+        let body = serde_json::json!({ "fields": fields });
+
+        match self
+            .send_request::<domains::issue::CreatedIssue, _>(url, Method::Post, None, Some(&body))
+            .await
+        {
+            Ok(res) => serde_json::to_string(&res).unwrap_or_default(),
+            Err(e) => e.to_string(),
+        }
+    }
+
+    /// =========================================================================
+    /// PHASE 2: Management Domain
+    /// =========================================================================
+
+    #[rmcp::tool(
+        name = "issue_update_status",
+        description = "Moves an issue to a new workflow status (Transition)."
+    )]
+    async fn issue_update_status(
+        &self,
+        wrapper::Parameters(params): wrapper::Parameters<domains::issue::IssueUpdateStatusArgs>,
+    ) -> String {
+        let transition_id = match self
+            .find_transition_id(&params.issue_key, params.status)
+            .await
+        {
+            Some(id) => id,
+            None => {
+                return format!(
+                    r#"{{"error": "Transition to '{}' not found for issue {}\n"}}"#, // Added newline for clarity
+                    params.status, params.issue_key
+                );
+            }
+        };
+
+        let url = format!("/rest/api/3/issue/{}/transitions", params.issue_key);
+        let body = serde_json::json!({ "transition": { "id": transition_id } });
+
+        match self
+            .send_request::<serde_json::Value, _>(&url, Method::Post, None, Some(&body))
+            .await
+        {
+            Ok(_) => format!(
+                r#"{{"success": true, "message": "Issue {} moved to {}\n"}}"#, // Added newline for clarity
+                params.issue_key, params.status
+            ),
+            Err(e) => e.to_string(),
+        }
+    }
+
+    #[rmcp::tool(
+        name = "issue_assign",
+        description = "Assigns the issue to a specific user."
+    )]
+    async fn issue_assign(
+        &self,
+        wrapper::Parameters(params): wrapper::Parameters<domains::issue::IssueAssignArgs>,
+    ) -> String {
+        let account_id = match self.resolve_assignee(&params.assignee).await {
+            Some(id) => id,
+            None => {
+                return format!(
+                    r#"{{"error": "Could not resolve assignee '{}'\n"}}"#, // Added newline for clarity
+                    params.assignee
+                );
+            }
+        };
+
+        let url = format!("/rest/api/3/issue/{}/assignee", params.issue_key);
+        let body = serde_json::json!({ "accountId": if account_id.is_empty() { None } else { Some(account_id) } });
+
+        match self
+            .send_request::<serde_json::Value, _>(&url, Method::Put, None, Some(&body))
+            .await
+        {
+            Ok(_) => format!(
+                r#"{{"success": true, "message": "Issue {} assigned to {}\n"}}"#, // Added newline for clarity
+                params.issue_key, params.assignee
+            ),
+            Err(e) => e.to_string(),
+        }
+    }
+
+    #[rmcp::tool(
+        name = "issue_edit_details",
+        description = "Modifies informational fields of an existing issue."
+    )]
+    async fn issue_edit_details(
+        &self,
+        wrapper::Parameters(params): wrapper::Parameters<domains::issue::IssueEditDetailsArgs>,
+    ) -> String {
+        let url = format!("/rest/api/3/issue/{}", params.issue_key);
+        let mut fields = HashMap::new();
+
+        if let Some(summary) = params.summary {
+            fields.insert("summary".to_string(), serde_json::json!(summary));
+        }
+
+        if let Some(desc) = params.description {
+            fields.insert(
+                "description".to_string(),
+                domains::helpers::text_to_adf(&desc, domains::helpers::AdfStyle::Paragraph).0,
+            );
+        }
+
+        if let Some(priority) = params.priority {
+            fields.insert(
+                "priority".to_string(),
+                serde_json::json!({ "name": priority }),
+            );
+        }
+
+        if let Some(labels) = params.labels {
+            fields.insert("labels".to_string(), serde_json::json!(labels));
+        }
+
+        if let Some(components) = params.components {
+            let comps: Vec<_> = components
+                .into_iter()
+                .map(|c| serde_json::json!({ "name": c }))
+                .collect();
+            fields.insert("components".to_string(), serde_json::json!(comps));
+        }
+
+        if let Some(sp) = params.story_points {
+            if let Some(sp_field) = self.find_field_id("Story Points").await {
+                fields.insert(sp_field, serde_json::json!(sp));
+            } else if let Some(sp_field) = self.find_field_id("Story point estimate").await {
+                fields.insert(sp_field, serde_json::json!(sp));
+            }
+        }
+
+        let body = serde_json::json!({ "fields": fields });
+
+        match self
+            .send_request::<serde_json::Value, _>(&url, Method::Put, None, Some(&body))
+            .await
+        {
+            Ok(_) => format!(
+                r#"{{"success": true, "message": "Issue {} updated successfully\n"}}"#, // Added newline for clarity
+                params.issue_key
+            ),
+            Err(e) => e.to_string(),
+        }
+    }
+
+    #[rmcp::tool(
+        name = "issue_add_comment",
+        description = "Adds a comment to an issue."
+    )]
+    async fn issue_add_comment(
+        &self,
+        wrapper::Parameters(params): wrapper::Parameters<domains::issue::IssueAddCommentArgs>,
+    ) -> String {
+        let url = format!("/rest/api/3/issue/{}/comment", params.issue_key);
+        let body = serde_json::json!({ "body": domains::helpers::text_to_adf(&params.comment, domains::helpers::AdfStyle::Paragraph).0 });
+
+        match self
+            .send_request::<serde_json::Value, _>(&url, Method::Post, None, Some(&body))
+            .await
+        {
+            Ok(res) => serde_json::to_string(&res).unwrap_or_default(),
+            Err(e) => e.to_string(),
+        }
+    }
+
+    #[rmcp::tool(
+        name = "issue_link",
+        description = "Creates a semantic link between two issues."
+    )]
+    async fn issue_link(
+        &self,
+        wrapper::Parameters(params): wrapper::Parameters<domains::issue::IssueLinkArgs>,
+    ) -> String {
+        let url = "/rest/api/3/issueLink";
+        let body = serde_json::json!({
+            "type": { "name": params.link_type },
+            "inwardIssue": { "key": params.source_issue_key },
+            "outwardIssue": { "key": params.target_issue_key }
+        });
+
+        match self
+            .send_request::<serde_json::Value, _>(url, Method::Post, None, Some(&body))
+            .await
+        {
+            Ok(_) => format!(
+                r#"{{"success": true, "message": "Linked {} to {} with type {}\n"}}"#, // Added newline for clarity
+                params.source_issue_key, params.target_issue_key, params.link_type
+            ),
+            Err(e) => e.to_string(),
+        }
+    }
+
+    #[rmcp::tool(name = "issue_log_work", description = "Logs time spent on an issue.")]
+    async fn issue_log_work(
+        &self,
+        wrapper::Parameters(params): wrapper::Parameters<domains::issue::IssueLogWorkArgs>,
+    ) -> String {
+        let url = format!("/rest/api/3/issue/{}/worklog", params.issue_key);
+        let mut body = HashMap::new();
+        body.insert(
+            "timeSpent".to_string(),
+            serde_json::json!(params.time_spent),
+        );
+
+        if let Some(started) = params.started {
+            body.insert("started".to_string(), serde_json::json!(started));
+        }
+
+        if let Some(comment) = params.comment {
+            body.insert(
+                "comment".to_string(),
+                domains::helpers::text_to_adf(&comment, domains::helpers::AdfStyle::Paragraph).0,
+            );
+        }
+
+        match self
+            .send_request::<serde_json::Value, _>(&url, Method::Post, None, Some(&body))
+            .await
+        {
+            Ok(res) => serde_json::to_string(&res).unwrap_or_default(),
+            Err(e) => e.to_string(),
+        }
+    }
+
+    #[rmcp::tool(
+        name = "issue_delete",
+        description = "Permanently deletes an issue from Jira."
+    )]
+    async fn issue_delete(
+        &self,
+        wrapper::Parameters(params): wrapper::Parameters<domains::issue::IssueDeleteArgs>,
+    ) -> String {
+        let mut url = format!("/rest/api/3/issue/{}", params.issue_key);
+        if let Some(delete_subtasks) = params.delete_subtasks {
+            url = format!("{}?deleteSubtasks={}", url, delete_subtasks);
+        }
+
+        match self
+            .send_request::<serde_json::Value, ()>(&url, Method::Delete, None, None::<&()>)
+            .await
+        {
+            Ok(_) => format!(
+                r#"{{"success": true, "message": "Issue {} deleted successfully\n"}}"#, // Added newline for clarity
+                params.issue_key
+            ),
+            Err(e) => e.to_string(),
+        }
+    }
+
+    #[rmcp::tool(
+        name = "issue_delete_comment",
+        description = "Deletes a specific comment."
+    )]
+    async fn issue_delete_comment(
+        &self,
+        wrapper::Parameters(params): wrapper::Parameters<domains::issue::IssueDeleteCommentArgs>,
+    ) -> String {
+        let url = format!(
+            "/rest/api/3/issue/{}/comment/{}",
+            params.issue_key, params.comment_id
+        );
+
+        match self
+            .send_request::<serde_json::Value, ()>(&url, Method::Delete, None, None::<&()>)
+            .await
+        {
+            Ok(_) => format!(
+                r#"{{"success": true, "message": "Comment {} deleted successfully\n"}}"#, // Added newline for clarity
+                params.comment_id
+            ),
+            Err(e) => e.to_string(),
+        }
+    }
+
+    #[rmcp::tool(
+        name = "issue_delete_link",
+        description = "Removes a link between two issues."
+    )]
+    async fn issue_delete_link(
+        &self,
+        wrapper::Parameters(params): wrapper::Parameters<domains::issue::IssueDeleteLinkArgs>,
+    ) -> String {
+        let url = format!("/rest/api/3/issueLink/{}", params.link_id);
+
+        match self
+            .send_request::<serde_json::Value, ()>(&url, Method::Delete, None, None::<&()>)
+            .await
+        {
+            Ok(_) => format!(
+                r#"{{"success": true, "message": "Link {} deleted successfully\n"}}"#, // Added newline for clarity
+                params.link_id
+            ),
+            Err(e) => e.to_string(),
+        }
+    }
+
+    /// =========================================================================
+    /// PHASE 3: Search & Discovery Domain
+    /// =========================================================================
+
+    #[rmcp::tool(
+        name = "search_issues",
+        description = "Searches for issues using natural language text or specific filters."
+    )]
+    async fn search_issues(
+        &self,
+        wrapper::Parameters(params): wrapper::Parameters<domains::jql::SearchIssuesArgs>,
+    ) -> String {
+        let url = "/rest/api/3/search/jql";
+        let mut jql_parts = Vec::new();
+        let mut order_by_clause = None;
+
+        if let Some(text) = params.text {
+            jql_parts.push(format!("text ~ \"{}\"", text));
+        }
+        if let Some(status) = params.status {
+            jql_parts.push(format!("status = \"{}\"", status));
+        }
+        if let Some(assignee) = params.assignee {
+            let acc_id = self.resolve_assignee(&assignee).await.unwrap_or(assignee);
+            if acc_id.is_empty() {
+                jql_parts.push("assignee is EMPTY".to_string());
+            } else {
+                jql_parts.push(format!("assignee = \"{}\"", acc_id));
+            }
+        }
+        if let Some(raw_jql) = params.jql {
+            // Robust parsing of ORDER BY
+            let lower_jql = raw_jql.to_lowercase();
+            if let Some(idx) = lower_jql.rfind("order by") {
+                let (predicate, order) = raw_jql.split_at(idx);
+                if !predicate.trim().is_empty() {
+                    jql_parts.push(format!("({})", predicate.trim()));
+                }
+                order_by_clause = Some(order.to_string());
+            } else {
+                jql_parts.push(format!("({})", raw_jql));
+            }
+        }
+
+        let mut jql = jql_parts.join(" AND ");
+
+        if let Some(order) = order_by_clause {
+            jql.push_str(" ");
+            jql.push_str(&order);
+        }
+
+        let mut body = HashMap::new();
+        body.insert("jql".to_string(), serde_json::json!(jql));
+        if let Some(limit) = params.limit {
+            body.insert("maxResults".to_string(), serde_json::json!(limit));
+        }
+        body.insert("fieldsByKeys".to_string(), serde_json::json!(true));
+
+        match self
+            .send_request::<serde_json::Value, _>(url, Method::Post, None, Some(&body))
+            .await
+        {
+            Ok(res) => serde_json::to_string(&res).unwrap_or_default(),
+            Err(e) => e.to_string(),
+        }
+    }
+
+    #[rmcp::tool(
+        name = "issue_get",
+        description = "Retrieves the full details of a specific issue in a flattened, clean format."
+    )]
+    async fn issue_get(
+        &self,
+        wrapper::Parameters(params): wrapper::Parameters<domains::issue::IssueGetArgs>,
+    ) -> String {
+        let url = format!("/rest/api/3/issue/{}", params.issue_key);
+
+        match self
+            .send_request::<domains::issue::Issue, ()>(&url, Method::Get, None, None::<&()>)
+            .await
+        {
+            Ok(res) => serde_json::to_string(&res).unwrap_or_default(),
+            Err(e) => e.to_string(),
+        }
+    }
+
+    #[rmcp::tool(
+        name = "agile_rank_issues",
+        description = "Reorders issues in the backlog or board."
+    )]
+    async fn agile_rank_issues(
+        &self,
+        wrapper::Parameters(params): wrapper::Parameters<domains::agile::AgileRankIssuesArgs>,
+    ) -> String {
+        let url = "/rest/agile/1.0/issue/rank";
+        let mut body = HashMap::new();
+        body.insert("issues".to_string(), serde_json::json!(params.issue_keys));
+
+        if let Some(after) = params.after_issue_key {
+            body.insert("rankAfterIssue".to_string(), serde_json::json!(after));
+        }
+        if let Some(before) = params.before_issue_key {
+            body.insert("rankBeforeIssue".to_string(), serde_json::json!(before));
+        }
+
+        match self
+            .send_request::<serde_json::Value, _>(url, Method::Put, None, Some(&body))
+            .await
+        {
+            Ok(_) => {
+                r#"{{"success": true, "message": "Issues reordered successfully"}}"#.to_string()
+            }
+            Err(e) => e.to_string(),
+        }
+    }
+
+    /// =========================================================================
+    /// PHASE 4: Agile Domain (Sprints)
+    /// =========================================================================
+    #[rmcp::tool(
+        name = "board_get_sprints",
+        description = "Lists sprints associated with a board or project."
+    )]
+    async fn board_get_sprints(
+        &self,
+        wrapper::Parameters(params): wrapper::Parameters<domains::sprint::BoardGetSprintsArgs>,
+    ) -> String {
+        // First, find the board ID
+        let board_id = if let Some(name) = params.board_name {
+            let url = "/rest/agile/1.0/board";
+            let query = vec![("name", name)];
+            let resp: serde_json::Value = self
+                .send_request::<_, ()>(url, Method::Get, Some(&query), None::<&()>)
+                .await
+                .unwrap_or(serde_json::Value::Null);
+            resp.get("values")
+                .and_then(|v| v.as_array())
+                .and_then(|a| a.first())
+                .and_then(|b| b.get("id"))
+                .and_then(|id| id.as_i64())
+        } else if let Some(project) = params.project_key {
+            let url = "/rest/agile/1.0/board";
+            let query = vec![("projectKeyOrId", project)];
+            let resp: serde_json::Value = self
+                .send_request::<_, ()>(url, Method::Get, Some(&query), None::<&()>)
+                .await
+                .unwrap_or(serde_json::Value::Null);
+            resp.get("values")
+                .and_then(|v| v.as_array())
+                .and_then(|a| a.first())
+                .and_then(|b| b.get("id"))
+                .and_then(|id| id.as_i64())
+        } else {
+            None
+        };
+
+        let board_id = match board_id {
+            Some(id) => id,
+            None => return r#"{{"error": "Board not found"}}"#.to_string(),
+        };
+
+        let url = format!("/rest/agile/1.0/board/{}/sprint", board_id);
+        let mut query = Vec::new();
+        if let Some(state) = params.state {
+            query.push(("state", state.to_string()));
+        }
+
+        match self
+            .send_request::<serde_json::Value, ()>(&url, Method::Get, Some(&query), None::<&()>)
+            .await
+        {
+            Ok(res) => serde_json::to_string(&res).unwrap_or_default(),
+            Err(e) => e.to_string(),
+        }
+    }
+
+    #[rmcp::tool(
+        name = "board_get_backlog",
+        description = "Gets issues in the backlog."
+    )]
+    async fn board_get_backlog(
+        &self,
+        wrapper::Parameters(params): wrapper::Parameters<domains::agile::BoardGetBacklogArgs>,
+    ) -> String {
+        let board_id = if let Some(name) = params.board_name {
+            let url = "/rest/agile/1.0/board";
+            let query = vec![("name", name)];
+            let resp: serde_json::Value = self
+                .send_request::<_, ()>(url, Method::Get, Some(&query), None::<&()>)
+                .await
+                .unwrap_or(serde_json::Value::Null);
+            resp.get("values")
+                .and_then(|v| v.as_array())
+                .and_then(|a| a.first())
+                .and_then(|b| b.get("id"))
+                .and_then(|id| id.as_i64())
+        } else if let Some(project) = params.project_key {
+            let url = "/rest/agile/1.0/board";
+            let query = vec![("projectKeyOrId", project)];
+            let resp: serde_json::Value = self
+                .send_request::<_, ()>(url, Method::Get, Some(&query), None::<&()>)
+                .await
+                .unwrap_or(serde_json::Value::Null);
+            resp.get("values")
+                .and_then(|v| v.as_array())
+                .and_then(|a| a.first())
+                .and_then(|b| b.get("id"))
+                .and_then(|id| id.as_i64())
+        } else {
+            None
+        };
+
+        let board_id = match board_id {
+            Some(id) => id,
+            None => return r#"{{"error": "Board not found"}}"#.to_string(),
+        };
+
+        let url = format!("/rest/agile/1.0/board/{}/backlog", board_id);
+
+        match self
+            .send_request::<serde_json::Value, ()>(&url, Method::Get, None, None::<&()>)
+            .await
+        {
+            Ok(res) => serde_json::to_string(&res).unwrap_or_default(),
+            Err(e) => e.to_string(),
+        }
+    }
+
+    #[rmcp::tool(name = "sprint_create", description = "Creates a new planned sprint.")]
+    async fn sprint_create(
+        &self,
+        wrapper::Parameters(params): wrapper::Parameters<domains::sprint::SprintCreateArgs>,
+    ) -> String {
+        let url = "/rest/agile/1.0/sprint";
+        let mut body = HashMap::new();
+        body.insert(
+            "originBoardId".to_string(),
+            serde_json::json!(params.board_id),
+        );
+        body.insert("name".to_string(), serde_json::json!(params.name));
+
+        if let Some(goal) = params.goal {
+            body.insert("goal".to_string(), serde_json::json!(goal));
+        }
+        if let Some(start) = params.start_date {
+            body.insert("startDate".to_string(), serde_json::json!(start));
+        }
+        if let Some(end) = params.end_date {
+            body.insert("endDate".to_string(), serde_json::json!(end));
+        }
+
+        match self
+            .send_request::<serde_json::Value, _>(url, Method::Post, None, Some(&body))
+            .await
+        {
+            Ok(res) => serde_json::to_string(&res).unwrap_or_default(),
+            Err(e) => e.to_string(),
+        }
+    }
+
+    #[rmcp::tool(
+        name = "sprint_update",
+        description = "Updates a sprint's details or changes its state (Start/Close)."
+    )]
+    async fn sprint_update(
+        &self,
+        wrapper::Parameters(params): wrapper::Parameters<domains::sprint::SprintUpdateArgs>,
+    ) -> String {
+        // First, get current sprint data to merge with updates
+        let get_url = format!("/rest/agile/1.0/sprint/{}", params.sprint_id);
+        let current_sprint: serde_json::Value = match self
+            .send_request::<serde_json::Value, ()>(&get_url, Method::Get, None, None::<&()>)
+            .await
+        {
+            Ok(sprint) => sprint,
+            Err(e) => return format!(r#"{{"error": "Failed to get sprint: {}"}}"#, e),
+        };
+
+        let mut body = HashMap::new();
+
+        // Handle name with validation
+        let final_name = if let Some(new_name) = params.name {
+            if new_name.len() > 30 {
+                return format!(
+                    r#"{{"error": "Sprint name must be 30 characters or less (got {} characters)"}}"#,
+                    new_name.len()
+                );
+            }
+            new_name
+        } else {
+            // Use current name if not updating
+            current_sprint["name"]
+                .as_str()
+                .unwrap_or("Sprint")
+                .to_string()
+        };
+        body.insert("name".to_string(), serde_json::json!(final_name));
+
+        // Handle state - use current if not updating
+        let final_state = if let Some(new_state) = params.state {
+            new_state.to_string()
+        } else {
+            current_sprint["state"]
+                .as_str()
+                .unwrap_or("future")
+                .to_string()
+        };
+        body.insert("state".to_string(), serde_json::json!(final_state));
+
+        // Optional fields
+        if let Some(goal) = params.goal {
+            body.insert("goal".to_string(), serde_json::json!(goal));
+        } else if let Some(current_goal) = current_sprint["goal"].as_str() {
+            body.insert("goal".to_string(), serde_json::json!(current_goal));
+        }
+
+        if let Some(start) = params.start_date {
+            body.insert("startDate".to_string(), serde_json::json!(start));
+        } else if let Some(current_start) = current_sprint["startDate"].as_str() {
+            body.insert("startDate".to_string(), serde_json::json!(current_start));
+        }
+
+        if let Some(end) = params.end_date {
+            body.insert("endDate".to_string(), serde_json::json!(end));
+        } else if let Some(current_end) = current_sprint["endDate"].as_str() {
+            body.insert("endDate".to_string(), serde_json::json!(current_end));
+        }
+
+        let url = format!("/rest/agile/1.0/sprint/{}", params.sprint_id);
+        match self
+            .send_request::<serde_json::Value, _>(&url, Method::Put, None, Some(&body))
+            .await
+        {
+            Ok(res) => serde_json::to_string(&res).unwrap_or_default(),
+            Err(e) => e.to_string(),
+        }
+    }
+
+    #[rmcp::tool(
+        name = "sprint_add_issues",
+        description = "Moves issues into a specific sprint."
+    )]
+    async fn sprint_add_issues(
+        &self,
+        wrapper::Parameters(params): wrapper::Parameters<domains::sprint::SprintAddIssuesArgs>,
+    ) -> String {
+        let url = format!("/rest/agile/1.0/sprint/{}/issue", params.sprint_id);
+        let body = serde_json::json!({ "issues": params.issue_keys });
+
+        match self
+            .send_request::<serde_json::Value, _>(&url, Method::Post, None, Some(&body))
+            .await
+        {
+            Ok(_) => format!(
+                r#"{{"success": true, "message": "Issues added to sprint {}\n"}}"#, // Added newline for clarity
+                params.sprint_id
+            ),
+            Err(e) => e.to_string(),
+        }
+    }
+
+    #[rmcp::tool(name = "sprint_delete", description = "Deletes a planned sprint.")]
+    async fn sprint_delete(
+        &self,
+        wrapper::Parameters(params): wrapper::Parameters<domains::sprint::SprintDeleteArgs>,
+    ) -> String {
+        let url = format!("/rest/agile/1.0/sprint/{}", params.sprint_id);
+
+        match self
+            .send_request::<serde_json::Value, ()>(&url, Method::Delete, None, None::<&()>)
+            .await
+        {
+            Ok(_) => format!(
+                r#"{{"success": true, "message": "Sprint {} deleted successfully\n"}}"#, // Added newline for clarity
+                params.sprint_id
+            ),
+            Err(e) => e.to_string(),
+        }
     }
 }
 
