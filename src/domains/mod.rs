@@ -1,11 +1,9 @@
 pub mod agile;
+pub mod enums;
 pub mod helpers;
 pub mod issue;
-pub mod issue_content;
-pub mod issue_relations;
 pub mod jql;
-pub mod metadata;
-pub mod project;
+pub mod sprint;
 pub mod user;
 
 use schemars::JsonSchema;
