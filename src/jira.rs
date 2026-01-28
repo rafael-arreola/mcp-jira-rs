@@ -289,8 +289,12 @@ impl Jira {
         if let Some(sp) = params.story_points {
             if let Some(sp_field) = self.find_field_id("Story Points").await {
                 fields.insert(sp_field, serde_json::json!(sp));
-            } else if let Some(sp_field) = self.find_field_id("Story point estimate").await {
-                fields.insert(sp_field, serde_json::json!(sp));
+            }
+        }
+
+        if let Some(sp_estimate) = params.story_point_estimate {
+            if let Some(sp_field) = self.find_field_id("Story point estimate").await {
+                fields.insert(sp_field, serde_json::json!(sp_estimate));
             }
         }
 
@@ -422,8 +426,12 @@ impl Jira {
         if let Some(sp) = params.story_points {
             if let Some(sp_field) = self.find_field_id("Story Points").await {
                 fields.insert(sp_field, serde_json::json!(sp));
-            } else if let Some(sp_field) = self.find_field_id("Story point estimate").await {
-                fields.insert(sp_field, serde_json::json!(sp));
+            }
+        }
+
+        if let Some(sp_estimate) = params.story_point_estimate {
+            if let Some(sp_field) = self.find_field_id("Story point estimate").await {
+                fields.insert(sp_field, serde_json::json!(sp_estimate));
             }
         }
 
