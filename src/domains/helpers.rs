@@ -96,3 +96,66 @@ pub fn text_to_adf(text: &str, style: AdfStyle) -> JsonValue {
         })),
     }
 }
+
+use super::enums::FieldPreset;
+
+/// Parsea un string de filtro en formato Jira API.
+/// Soporta:
+/// - Presets: "basic", "standard", "minimal"
+/// - Listas: "id key summary" o "id,key,summary"
+/// - Sin cambios: "*all" o cualquier otro formato Jira
+pub fn parse_field_filter(filter: &str) -> String {
+    let trimmed = filter.trim();
+
+    // Intentar parsear como preset
+    match trimmed.to_lowercase().as_str() {
+        "minimal" => return FieldPreset::Minimal.to_field_list(),
+        "basic" => return FieldPreset::Basic.to_field_list(),
+        "standard" => return FieldPreset::Standard.to_field_list(),
+        "detailed" => return FieldPreset::Detailed.to_field_list(),
+        "full" => return FieldPreset::Full.to_field_list(),
+        _ => {}
+    }
+
+    // Si contiene espacios pero no comas, convertir a formato Jira
+    if trimmed.contains(' ') && !trimmed.contains(',') {
+        return trimmed.replace(' ', ",");
+    }
+
+    // Retornar sin cambios (ya está en formato Jira)
+    trimmed.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_preset() {
+        assert_eq!(parse_field_filter("basic"), "id,key,summary,status");
+        assert_eq!(parse_field_filter("BASIC"), "id,key,summary,status");
+    }
+
+    #[test]
+    fn test_parse_space_separated() {
+        assert_eq!(parse_field_filter("id key summary"), "id,key,summary");
+    }
+
+    #[test]
+    fn test_parse_comma_separated() {
+        assert_eq!(parse_field_filter("id,key,summary"), "id,key,summary");
+    }
+
+    #[test]
+    fn test_parse_passthrough() {
+        assert_eq!(parse_field_filter("*all"), "*all");
+    }
+
+    #[test]
+    fn test_parse_custom_field() {
+        assert_eq!(
+            parse_field_filter("id key customfield_10016"),
+            "id,key,customfield_10016"
+        );
+    }
+}
