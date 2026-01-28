@@ -1,3 +1,4 @@
+{  
   "name": "@rafael-arreola/jira-rs",
   "version": "0.3.3",
   "description": "Jira MCP Server CLI wrapper",
