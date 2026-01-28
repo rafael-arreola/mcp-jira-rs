@@ -87,14 +87,16 @@ pub struct IssueEditDetailsArgs {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub components: Option<Vec<String>>,
+}
 
-    /// Story Points (Classic/Company-managed projects).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub story_points: Option<f64>,
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueSetStoryPointsArgs {
+    /// Issue ID or key (e.g., "PROJ-123").
+    pub issue_key: String,
 
-    /// Story point estimate (Next-Gen/Team-managed projects).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub story_point_estimate: Option<f64>,
+    /// Numeric estimation.
+    pub story_points: f64,
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]

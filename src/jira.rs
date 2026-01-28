@@ -123,6 +123,27 @@ impl Jira {
         None
     }
 
+    async fn get_editable_field_id(&self, issue_key: &str, possible_names: &[&str]) -> Option<String> {
+        let url = format!("/rest/api/3/issue/{}/editmeta", issue_key);
+        let meta: serde_json::Value = self
+            .send_request::<serde_json::Value, ()>(&url, Method::Get, None, None::<&()>)
+            .await
+            .ok()?;
+
+        let fields = meta.get("fields")?.as_object()?;
+
+        for (id, field_info) in fields {
+            if let Some(name) = field_info.get("name").and_then(|n| n.as_str()) {
+                for target in possible_names {
+                    if name.eq_ignore_ascii_case(target) {
+                        return Some(id.clone());
+                    }
+                }
+            }
+        }
+        None
+    }
+
     async fn resolve_issue_type_id(
         &self,
         project_key: &str,
@@ -384,7 +405,7 @@ impl Jira {
 
     #[rmcp::tool(
         name = "issue_edit_details",
-        description = "Modifies fields of an existing issue, including summary, description, priority, and issue type."
+        description = "Modifies informational fields of an existing issue."
     )]
     async fn issue_edit_details(
         &self,
@@ -392,6 +413,10 @@ impl Jira {
     ) -> String {
         let url = format!("/rest/api/3/issue/{}", params.issue_key);
         let mut fields = HashMap::new();
+
+        if let Some(summary) = params.summary {
+            fields.insert("summary".to_string(), serde_json::json!(summary));
+        }
 
         if let Some(desc) = params.description {
             fields.insert(
@@ -431,18 +456,6 @@ impl Jira {
             fields.insert("components".to_string(), serde_json::json!(comps));
         }
 
-        if let Some(sp) = params.story_points {
-            if let Some(sp_field) = self.find_field_id("Story Points").await {
-                fields.insert(sp_field, serde_json::json!(sp));
-            }
-        }
-
-        if let Some(sp_estimate) = params.story_point_estimate {
-            if let Some(sp_field) = self.find_field_id("Story point estimate").await {
-                fields.insert(sp_field, serde_json::json!(sp_estimate));
-            }
-        }
-
         let body = serde_json::json!({ "fields": fields });
 
         match self
@@ -454,6 +467,54 @@ impl Jira {
                 params.issue_key
             ),
             Err(e) => e.to_string(),
+        }
+    }
+
+    #[rmcp::tool(
+        name = "issue_set_story_points",
+        description = "Sets the story point estimation for an issue. Automatically detects the correct field (Story Points or Story point estimate)."
+    )]
+    async fn issue_set_story_points(
+        &self,
+        wrapper::Parameters(params): wrapper::Parameters<domains::issue::IssueSetStoryPointsArgs>,
+    ) -> String {
+        let url = format!("/rest/api/3/issue/{}", params.issue_key);
+        let mut fields = HashMap::new();
+
+        // Check which field is actually editable for this issue
+        let field_id = self
+            .get_editable_field_id(
+                &params.issue_key,
+                &["Story Points", "Story point estimate"],
+            )
+            .await;
+
+        match field_id {
+            Some(id) => {
+                fields.insert(id, serde_json::json!(params.story_points));
+                let body = serde_json::json!({ "fields": fields });
+
+                match self
+                    .send_request::<serde_json::Value, _>(&url, Method::Put, None, Some(&body))
+                    .await
+                {
+                    Ok(_) => format!(
+                        r#"{{"success": true, "message": "Story points set to {} for issue {}\n"}}"#,
+                        params.story_points, params.issue_key
+                    ),
+                    Err(e) => e.to_string(),
+                }
+            }
+            None => {
+                // Fallback: Try global search if editmeta fails (though unlikely to work if editmeta didn't have it)
+                let legacy_id = self.find_field_id("Story Points").await;
+                let nextgen_id = self.find_field_id("Story point estimate").await;
+                
+                format!(
+                    r#"{{"error": "Could not find an editable 'Story Points' field for issue {}. Detected fields in instance: Story Points (Classic) = {:?}, Story point estimate (Next-Gen) = {:?}. Please ensure the field is on the issue's EDIT screen.\n"}}"#,
+                    params.issue_key, legacy_id, nextgen_id
+                )
+            }
         }
     }
 
