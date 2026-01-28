@@ -119,14 +119,15 @@ _Available presets: `minimal`, `basic`, `standard`, `detailed`._
 
 ### Create an issue with story points
 
-The server automatically detects if the field is named "Story Points" or "Story point estimate".
+Use `storyPoints` for Classic (Company-managed) projects and `storyPointEstimate` for Next-Gen (Team-managed) projects.
 
 ```json
 {
   "projectKey": "PROJ",
   "summary": "Implement OAuth2 authentication",
   "issueType": "Story",
-  "storyPoints": 5
+  "storyPoints": 5,
+  "storyPointEstimate": 3
 }
 ```
 

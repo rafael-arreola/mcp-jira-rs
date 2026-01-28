@@ -35,9 +35,13 @@ pub struct IssueCreateArgs {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub components: Option<Vec<String>>,
 
-    /// Numeric estimation.
+    /// Story Points (Classic/Company-managed projects).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub story_points: Option<f64>,
+
+    /// Story point estimate (Next-Gen/Team-managed projects).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub story_point_estimate: Option<f64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -81,8 +85,13 @@ pub struct IssueEditDetailsArgs {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub components: Option<Vec<String>>,
 
+    /// Story Points (Classic/Company-managed projects).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub story_points: Option<f64>,
+
+    /// Story point estimate (Next-Gen/Team-managed projects).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub story_point_estimate: Option<f64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
