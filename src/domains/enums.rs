@@ -121,3 +121,77 @@ impl fmt::Display for SprintState {
         }
     }
 }
+
+/// Presets de filtros de campos para reducir contexto del LLM.
+/// Cubre ~80% de casos comunes sin necesidad de discovery.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum FieldPreset {
+    /// Solo identificadores básicos: id, key
+    /// Reducción: ~95% del tamaño
+    Minimal,
+
+    /// Vista rápida: id, key, summary, status
+    /// Reducción: ~90% del tamaño
+    Basic,
+
+    /// Campos más comunes: id, key, summary, status, assignee, priority, created, updated
+    /// Reducción: ~85% del tamaño
+    Standard,
+
+    /// Vista detallada con campos principales: standard + description, labels, components
+    /// Reducción: ~70% del tamaño
+    Detailed,
+
+    /// Sin filtro (comportamiento actual)
+    Full,
+}
+
+impl FieldPreset {
+    /// Convierte el preset a lista de campos para Jira API
+    pub fn to_field_list(&self) -> String {
+        match self {
+            Self::Minimal => "id,key".to_string(),
+            Self::Basic => "id,key,summary,status".to_string(),
+            Self::Standard => "id,key,summary,status,assignee,priority,created,updated".to_string(),
+            Self::Detailed => "id,key,summary,status,assignee,priority,created,updated,description,labels,components,issuelinks".to_string(),
+            Self::Full => "*all".to_string(),
+        }
+    }
+}
+
+impl fmt::Display for FieldPreset {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Minimal => write!(f, "minimal"),
+            Self::Basic => write!(f, "basic"),
+            Self::Standard => write!(f, "standard"),
+            Self::Detailed => write!(f, "detailed"),
+            Self::Full => write!(f, "full"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_field_preset_minimal() {
+        assert_eq!(FieldPreset::Minimal.to_field_list(), "id,key");
+    }
+
+    #[test]
+    fn test_field_preset_basic() {
+        let fields = FieldPreset::Basic.to_field_list();
+        assert!(fields.contains("summary"));
+        assert!(fields.contains("status"));
+    }
+
+    #[test]
+    fn test_field_preset_standard() {
+        let fields = FieldPreset::Standard.to_field_list();
+        assert!(fields.contains("assignee"));
+        assert!(fields.contains("priority"));
+    }
+}

@@ -23,4 +23,10 @@ pub struct SearchIssuesArgs {
     /// Maximum results (default 50)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub limit: Option<i32>,
+
+    /// **[OPTIONAL]** Field filter (same syntax as issue_get).
+    /// Presets: "minimal", "basic", "standard", "detailed"
+    /// Custom: "id key summary status"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filter: Option<String>,
 }

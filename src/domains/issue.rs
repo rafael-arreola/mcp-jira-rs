@@ -157,8 +157,30 @@ pub struct IssueDeleteLinkArgs {
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct IssueGetArgs {
-    /// Issue ID or key.
+    /// Issue ID or key (e.g., "PROJ-123").
     pub issue_key: String,
+
+    /// **[OPTIONAL]** Field filter to reduce LLM context usage by ~70-90%.
+    ///
+    /// **Presets** (recommended for most cases):
+    /// - `"minimal"`: Only id, key (~95% reduction)
+    /// - `"basic"`: id, key, summary, status (~90% reduction)
+    /// - `"standard"`: basic + assignee, priority, dates (~85% reduction)
+    /// - `"detailed"`: standard + description, labels, components (~70% reduction)
+    /// - `"full"`: No filter (default behavior)
+    ///
+    /// **Custom field list** (space or comma separated):
+    /// - `"id key summary status"` or `"id,key,summary,status"`
+    /// - Supports dot notation: `"assignee.displayName"`
+    /// - Include custom fields: `"id key customfield_10016"` (use `fields_list` to discover)
+    ///
+    /// **Examples**:
+    /// ```json
+    /// {"issue_key": "PROJ-123", "filter": "basic"}
+    /// {"issue_key": "PROJ-123", "filter": "id key summary customfield_10016"}
+    /// ```
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filter: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -203,4 +225,15 @@ pub(crate) struct TransitionTo {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct StatusCategory {
     pub key: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FieldsListArgs {
+    /// **[OPTIONAL]** Filter by field type.
+    /// - `"system"`: Only Jira system fields (summary, status, assignee, etc.)
+    /// - `"custom"`: Only custom fields (Story Points, Sprint, etc.)
+    /// - Omit for all fields
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub field_type: Option<String>,
 }
