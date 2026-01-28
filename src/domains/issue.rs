@@ -77,6 +77,9 @@ pub struct IssueEditDetailsArgs {
     pub description: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub issue_type: Option<enums::IssueType>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub priority: Option<enums::Priority>,
 
     #[serde(skip_serializing_if = "Option::is_none")]

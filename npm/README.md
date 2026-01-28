@@ -68,7 +68,7 @@ Add this to your `claude_desktop_config.json` file:
 | `issue_create`        | Creates Stories, Bugs, Epics, Tasks, and Sub-tasks.                   |
 | `issue_get`           | Retrieves issue details with smart **Field Filtering**.               |
 | `search_issues`       | Searches issues using JQL or plain text with result limits.           |
-| `issue_edit_details`  | Updates summary, description, priority, labels, and story points.     |
+| `issue_edit_details`  | Updates summary, description, priority, labels, story points, and issue type. |
 | `issue_update_status` | Transitions issues through the workflow (e.g., "To Do" to "Done").    |
 | `issue_assign`        | Assigns issues to users (supports "me", "unassigned", or Account ID). |
 | `issue_delete`        | Permanently deletes an issue.                                         |

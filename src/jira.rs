@@ -384,7 +384,7 @@ impl Jira {
 
     #[rmcp::tool(
         name = "issue_edit_details",
-        description = "Modifies informational fields of an existing issue."
+        description = "Modifies fields of an existing issue, including summary, description, priority, and issue type."
     )]
     async fn issue_edit_details(
         &self,
@@ -393,15 +393,23 @@ impl Jira {
         let url = format!("/rest/api/3/issue/{}", params.issue_key);
         let mut fields = HashMap::new();
 
-        if let Some(summary) = params.summary {
-            fields.insert("summary".to_string(), serde_json::json!(summary));
-        }
-
         if let Some(desc) = params.description {
             fields.insert(
                 "description".to_string(),
                 domains::helpers::text_to_adf(&desc, domains::helpers::AdfStyle::Paragraph).0,
             );
+        }
+
+        if let Some(issue_type) = params.issue_type {
+            // Extract project key from issue key (e.g., "PROJ-123" -> "PROJ")
+            let project_key = params.issue_key.split('-').next().unwrap_or("");
+            
+            if let Some((id, _)) = self.resolve_issue_type_id(project_key, issue_type).await {
+                fields.insert(
+                    "issuetype".to_string(),
+                    serde_json::json!({ "id": id }),
+                );
+            }
         }
 
         if let Some(priority) = params.priority {
