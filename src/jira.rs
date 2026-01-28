@@ -592,6 +592,94 @@ impl Jira {
         }
     }
 
+    #[rmcp::tool(
+        name = "issue_set_parent",
+        description = "Links an existing Story/Task to an Epic, or removes the parent link. Use this to organize existing issues under Epics in your project hierarchy."
+    )]
+    async fn issue_set_parent(
+        &self,
+        wrapper::Parameters(params): wrapper::Parameters<domains::issue::IssueSetParentArgs>,
+    ) -> String {
+        let url = format!("/rest/api/3/issue/{}", params.issue_key);
+        let mut fields = HashMap::new();
+
+        if params.parent_key.is_empty() {
+            fields.insert("parent".to_string(), serde_json::Value::Null);
+        } else {
+            fields.insert(
+                "parent".to_string(),
+                serde_json::json!({ "key": params.parent_key }),
+            );
+        }
+
+        let body = serde_json::json!({ "fields": fields });
+
+        match self
+            .send_request::<serde_json::Value, _>(&url, Method::Put, None, Some(&body))
+            .await
+        {
+            Ok(_) => {
+                if params.parent_key.is_empty() {
+                    format!(
+                        r#"{{"success": true, "message": "Parent removed from issue {}\n"}}"#,
+                        params.issue_key
+                    )
+                } else {
+                    format!(
+                        r#"{{"success": true, "message": "Issue {} linked to parent {}\n"}}"#,
+                        params.issue_key, params.parent_key
+                    )
+                }
+            }
+            Err(e) => {
+                // If modern field fails, try legacy "Epic Link" field
+                let error_msg = e.to_string();
+                if error_msg.contains("parent") || error_msg.contains("not found") {
+                    // Attempt legacy Epic Link field
+                    if let Some(epic_link_field) = self.find_field_id("Epic Link").await {
+                        let mut legacy_fields = HashMap::new();
+                        if params.parent_key.is_empty() {
+                            legacy_fields.insert(epic_link_field, serde_json::Value::Null);
+                        } else {
+                            legacy_fields
+                                .insert(epic_link_field, serde_json::json!(params.parent_key));
+                        }
+                        let legacy_body = serde_json::json!({ "fields": legacy_fields });
+
+                        return match self
+                            .send_request::<serde_json::Value, _>(
+                                &url,
+                                Method::Put,
+                                None,
+                                Some(&legacy_body),
+                            )
+                            .await
+                        {
+                            Ok(_) => {
+                                if params.parent_key.is_empty() {
+                                    format!(
+                                        r#"{{"success": true, "message": "Epic link removed from issue {} (legacy field)\n"}}"#,
+                                        params.issue_key
+                                    )
+                                } else {
+                                    format!(
+                                        r#"{{"success": true, "message": "Issue {} linked to Epic {} (legacy field)\n"}}"#,
+                                        params.issue_key, params.parent_key
+                                    )
+                                }
+                            }
+                            Err(legacy_err) => format!(
+                                r#"{{"error": "Failed with both parent and Epic Link fields. Modern error: {}. Legacy error: {}"}}"#,
+                                error_msg, legacy_err
+                            ),
+                        };
+                    }
+                }
+                error_msg
+            }
+        }
+    }
+
     /// =========================================================================
     /// PHASE 3: Search & Discovery Domain
     /// =========================================================================
@@ -689,12 +777,10 @@ impl Jira {
             Some(&query_params)
         };
 
-        match self.send_request::<domains::issue::Issue, ()>(
-            &url,
-            Method::Get,
-            query,
-            None::<&()>
-        ).await {
+        match self
+            .send_request::<domains::issue::Issue, ()>(&url, Method::Get, query, None::<&()>)
+            .await
+        {
             Ok(res) => serde_json::to_string(&res).unwrap_or_default(),
             Err(e) => e.to_string(),
         }
@@ -710,7 +796,10 @@ impl Jira {
     ) -> String {
         let url = "/rest/api/3/field";
 
-        match self.send_request::<Vec<serde_json::Value>, ()>(url, Method::Get, None, None::<&()>).await {
+        match self
+            .send_request::<Vec<serde_json::Value>, ()>(url, Method::Get, None, None::<&()>)
+            .await
+        {
             Ok(fields) => {
                 // Simplificar respuesta para reducir contexto
                 let simplified: Vec<_> = fields
@@ -729,7 +818,8 @@ impl Jira {
                             }
                         }
 
-                        let field_type = field.get("schema")
+                        let field_type = field
+                            .get("schema")
                             .and_then(|s| s.get("type"))
                             .and_then(|t| t.as_str())
                             .unwrap_or("unknown");
@@ -748,7 +838,7 @@ impl Jira {
                     "fields": simplified,
                     "usage": "Use field 'id' values in filter parameters. Example: filter='id key summary customfield_10016'"
                 })).unwrap_or_default()
-            },
+            }
             Err(e) => format!(r#"{{"error": "Failed to fetch fields: {}"}}"#, e),
         }
     }

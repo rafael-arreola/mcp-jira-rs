@@ -59,7 +59,7 @@ Add this to your `claude_desktop_config.json` file:
 }
 ```
 
-## Available Tools (20)
+## Available Tools (21)
 
 ### 🎫 Issue Management
 
@@ -81,6 +81,7 @@ Add this to your `claude_desktop_config.json` file:
 | `issue_delete_comment` | Deletes specific comments by ID.                                  |
 | `issue_link`           | Creates semantic links between issues (Blocks, Relates to, etc.). |
 | `issue_delete_link`    | Removes existing links between issues.                            |
+| `issue_set_parent`     | Links an existing Story/Task to an Epic or removes the link.      |
 | `issue_log_work`       | Logs time worked on a task.                                       |
 
 ### 🏃 Agile Operations
@@ -126,6 +127,26 @@ The server automatically detects if the field is named "Story Points" or "Story 
   "summary": "Implement OAuth2 authentication",
   "issueType": "Story",
   "storyPoints": 5
+}
+```
+
+### Link an existing Story to an Epic
+
+Use `issue_set_parent` to organize Stories under Epics:
+
+```json
+{
+  "issueKey": "PROJ-123",
+  "parentKey": "PROJ-100"
+}
+```
+
+To remove the link, pass an empty `parentKey`:
+
+```json
+{
+  "issueKey": "PROJ-123",
+  "parentKey": ""
 }
 ```
 

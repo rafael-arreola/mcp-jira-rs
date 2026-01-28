@@ -156,6 +156,16 @@ pub struct IssueDeleteLinkArgs {
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+pub struct IssueSetParentArgs {
+    /// Issue key to link (e.g., "PROJ-123" - the Story).
+    pub issue_key: String,
+
+    /// Parent issue key (e.g., "PROJ-100" - the Epic). Set to empty string to remove parent.
+    pub parent_key: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct IssueGetArgs {
     /// Issue ID or key (e.g., "PROJ-123").
     pub issue_key: String,
