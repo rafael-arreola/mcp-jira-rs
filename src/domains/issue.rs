@@ -153,6 +153,20 @@ pub struct IssueDeleteArgs {
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+pub struct IssueArchiveArgs {
+    /// List of issue keys or IDs to archive.
+    pub issue_keys: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueUnarchiveArgs {
+    /// List of issue keys or IDs to unarchive.
+    pub issue_keys: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct IssueDeleteCommentArgs {
     /// Issue ID or key.
     pub issue_key: String,
