@@ -1,6 +1,6 @@
 [package]
 name = "jira-rs"
-version = "0.3.8"
+version = "0.3.9"
 edition = "2024"
 license = "MIT"
 authors = ["Carlos Rafael Arreola Hernández <rafael-arreola@outlook.com>"]

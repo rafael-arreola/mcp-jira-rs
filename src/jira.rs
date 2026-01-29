@@ -623,6 +623,46 @@ impl Jira {
     }
 
     #[rmcp::tool(
+        name = "issue_archive",
+        description = "Archives a list of issues. Archiving an issue removes it from the index and search results but preserves the data."
+    )]
+    async fn issue_archive(
+        &self,
+        wrapper::Parameters(params): wrapper::Parameters<domains::issue::IssueArchiveArgs>,
+    ) -> String {
+        let url = "/rest/api/3/issue/archive";
+        let body = serde_json::json!({ "issueIdsOrKeys": params.issue_keys });
+
+        match self
+            .send_request::<serde_json::Value, _>(url, Method::Put, None, Some(&body))
+            .await
+        {
+            Ok(res) => serde_json::to_string(&res).unwrap_or_default(),
+            Err(e) => e.to_string(),
+        }
+    }
+
+    #[rmcp::tool(
+        name = "issue_unarchive",
+        description = "Unarchives (restores) a list of previously archived issues."
+    )]
+    async fn issue_unarchive(
+        &self,
+        wrapper::Parameters(params): wrapper::Parameters<domains::issue::IssueUnarchiveArgs>,
+    ) -> String {
+        let url = "/rest/api/3/issue/archive/restore";
+        let body = serde_json::json!({ "issueIdsOrKeys": params.issue_keys });
+
+        match self
+            .send_request::<serde_json::Value, _>(url, Method::Put, None, Some(&body))
+            .await
+        {
+            Ok(res) => serde_json::to_string(&res).unwrap_or_default(),
+            Err(e) => e.to_string(),
+        }
+    }
+
+    #[rmcp::tool(
         name = "issue_delete_comment",
         description = "Deletes a specific comment."
     )]

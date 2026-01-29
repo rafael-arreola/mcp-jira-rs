@@ -143,6 +143,17 @@ Use `issue_set_story_points` to update the estimation of an existing issue. The 
 }
 ```
 
+### Change Issue Type
+
+Use `issue_edit_details` to convert an issue to a different type (e.g., from Task to Bug):
+
+```json
+{
+  "issueKey": "PROJ-123",
+  "issueType": "Bug"
+}
+```
+
 ### Link an existing Story to an Epic
 
 Use `issue_set_parent` to organize Stories under Epics:
