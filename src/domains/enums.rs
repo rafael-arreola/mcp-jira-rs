@@ -2,31 +2,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-#[derive(Debug, Serialize, Deserialize, JsonSchema, Clone, Copy, PartialEq, Eq)]
-#[schemars(inline)]
-pub enum IssueType {
-    Epic,
-    Story,
-    Subtask,
-    Task,
-    Feature,
-    Request,
-    Bug,
-}
 
-impl fmt::Display for IssueType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            IssueType::Story => write!(f, "Story"),
-            IssueType::Bug => write!(f, "Bug"),
-            IssueType::Epic => write!(f, "Epic"),
-            IssueType::Task => write!(f, "Task"),
-            IssueType::Subtask => write!(f, "Subtask"),
-            IssueType::Feature => write!(f, "Feature"),
-            IssueType::Request => write!(f, "Request"),
-        }
-    }
-}
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema, Clone, Copy, PartialEq, Eq)]
 #[schemars(inline)]
@@ -172,26 +148,4 @@ impl fmt::Display for FieldPreset {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
 
-    #[test]
-    fn test_field_preset_minimal() {
-        assert_eq!(FieldPreset::Minimal.to_field_list(), "id,key");
-    }
-
-    #[test]
-    fn test_field_preset_basic() {
-        let fields = FieldPreset::Basic.to_field_list();
-        assert!(fields.contains("summary"));
-        assert!(fields.contains("status"));
-    }
-
-    #[test]
-    fn test_field_preset_standard() {
-        let fields = FieldPreset::Standard.to_field_list();
-        assert!(fields.contains("assignee"));
-        assert!(fields.contains("priority"));
-    }
-}

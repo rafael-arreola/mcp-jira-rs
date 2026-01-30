@@ -24,3 +24,10 @@ pub struct User {
     /// The avatars of the user.
     pub avatar_urls: Option<JsonValue>,
 }
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectGetUsersArgs {
+    /// The project key to find assignable users for (e.g. "PROJ").
+    pub project_key: String,
+}

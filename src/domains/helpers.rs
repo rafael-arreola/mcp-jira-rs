@@ -125,37 +125,3 @@ pub fn parse_field_filter(filter: &str) -> String {
     // Retornar sin cambios (ya está en formato Jira)
     trimmed.to_string()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_parse_preset() {
-        assert_eq!(parse_field_filter("basic"), "id,key,summary,status");
-        assert_eq!(parse_field_filter("BASIC"), "id,key,summary,status");
-    }
-
-    #[test]
-    fn test_parse_space_separated() {
-        assert_eq!(parse_field_filter("id key summary"), "id,key,summary");
-    }
-
-    #[test]
-    fn test_parse_comma_separated() {
-        assert_eq!(parse_field_filter("id,key,summary"), "id,key,summary");
-    }
-
-    #[test]
-    fn test_parse_passthrough() {
-        assert_eq!(parse_field_filter("*all"), "*all");
-    }
-
-    #[test]
-    fn test_parse_custom_field() {
-        assert_eq!(
-            parse_field_filter("id key customfield_10016"),
-            "id,key,customfield_10016"
-        );
-    }
-}

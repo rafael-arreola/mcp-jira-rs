@@ -9,8 +9,8 @@ pub struct IssueCreateArgs {
     /// Project key (e.g., "PROJ").
     pub project_key: String,
     
-    /// Issue type. Values: Story, Bug, Epic, Task, Sub-task.
-    pub issue_type: enums::IssueType,
+    /// Issue type. Can be the name (e.g., "Story", "Bug") or the ID.
+    pub issue_type: String,
 
     /// The issue title.
     pub summary: String,
@@ -77,7 +77,7 @@ pub struct IssueEditDetailsArgs {
     pub description: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub issue_type: Option<enums::IssueType>,
+    pub issue_type: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub priority: Option<enums::Priority>,
@@ -275,3 +275,21 @@ pub struct FieldsListArgs {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub field_type: Option<String>,
 }
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ListIssueTypesArgs {}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueTypeDetails {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub subtask: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub untranslated_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hierarchy_level: Option<i32>,
+}
+

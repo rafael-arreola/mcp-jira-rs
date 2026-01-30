@@ -147,7 +147,7 @@ impl Jira {
     async fn resolve_issue_type_id(
         &self,
         project_key: &str,
-        issue_type: domains::enums::IssueType,
+        issue_type: &str,
     ) -> Option<(String, bool)> {
         let url = format!(
             "/rest/api/3/issue/createmeta?projectKeys={}&expand=projects.issuetypes",
@@ -164,7 +164,7 @@ impl Jira {
             .find(|p| p.get("key").and_then(|k| k.as_str()).unwrap_or("") == project_key)?;
 
         let types = project.get("issuetypes")?.as_array()?;
-        let target = issue_type.to_string();
+        let target = issue_type;
 
         for t in types {
             let name = t.get("name").and_then(|v| v.as_str()).unwrap_or("");
@@ -172,10 +172,12 @@ impl Jira {
                 .get("untranslatedName")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            if name.eq_ignore_ascii_case(&target) || untranslated.eq_ignore_ascii_case(&target) {
-                let id = t.get("id").and_then(|v| v.as_str())?.to_string();
+            let id = t.get("id").and_then(|v| v.as_str()).unwrap_or("");
+
+            // Match by ID, name, or untranslated name (homologs)
+            if id == target || name.eq_ignore_ascii_case(target) || untranslated.eq_ignore_ascii_case(target) {
                 let is_subtask = t.get("subtask").and_then(|v| v.as_bool()).unwrap_or(false);
-                return Some((id, is_subtask));
+                return Some((id.to_string(), is_subtask));
             }
         }
 
@@ -259,13 +261,13 @@ impl Jira {
         );
 
         let (issue_type_id, _is_subtask) = match self
-            .resolve_issue_type_id(&params.project_key, params.issue_type)
+            .resolve_issue_type_id(&params.project_key, &params.issue_type)
             .await
         {
             Some(res) => res,
             None => {
                 return format!(
-                    r#"{{"error": "Could not find valid issue type ID for '{}' in project {}\n"}}"#, // Added newline for clarity
+                    r#"{{"error": "Could not find valid issue type ID for '{}' in project {}. Use 'list_issue_types' to see available types.\n"}}"#, 
                     params.issue_type, params.project_key
                 );
             }
@@ -429,7 +431,7 @@ impl Jira {
             // Extract project key from issue key (e.g., "PROJ-123" -> "PROJ")
             let project_key = params.issue_key.split('-').next().unwrap_or("");
             
-            if let Some((id, _)) = self.resolve_issue_type_id(project_key, issue_type).await {
+            if let Some((id, _)) = self.resolve_issue_type_id(project_key, &issue_type).await {
                 fields.insert(
                     "issuetype".to_string(),
                     serde_json::json!({ "id": id }),
@@ -957,6 +959,44 @@ impl Jira {
                 })).unwrap_or_default()
             }
             Err(e) => format!(r#"{{"error": "Failed to fetch fields: {}"}}"#, e),
+        }
+    }
+
+    #[rmcp::tool(
+        name = "list_issue_types",
+        description = "Lists all available issue types in the Jira instance. Useful for discovering issue type IDs and names when standard English types (Epic, Story, Task, etc.) are not available or use different names."
+    )]
+    async fn list_issue_types(
+        &self,
+        _params: wrapper::Parameters<domains::issue::ListIssueTypesArgs>,
+    ) -> String {
+        let url = "/rest/api/3/issuetype";
+        match self
+            .send_request::<Vec<domains::issue::IssueTypeDetails>, ()>(url, Method::Get, None, None::<&()>)
+            .await
+        {
+            Ok(types) => serde_json::to_string(&types).unwrap_or_default(),
+            Err(e) => format!(r#"{{"error": "Failed to fetch issue types: {}"}}"#, e),
+        }
+    }
+
+    #[rmcp::tool(
+        name = "project_get_users",
+        description = "Returns a list of users assignable to issues in a specific project."
+    )]
+    async fn project_get_users(
+        &self,
+        wrapper::Parameters(params): wrapper::Parameters<domains::user::ProjectGetUsersArgs>,
+    ) -> String {
+        let url = "/rest/api/3/user/assignable/search";
+        let query = vec![("project", params.project_key)];
+
+        match self
+            .send_request::<Vec<domains::user::User>, ()>(url, Method::Get, Some(&query), None::<&()>)
+            .await
+        {
+            Ok(users) => serde_json::to_string(&users).unwrap_or_default(),
+            Err(e) => format!(r#"{{"error": "Failed to fetch users: {}"}}"#, e),
         }
     }
 
