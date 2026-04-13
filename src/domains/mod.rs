@@ -3,6 +3,7 @@ pub mod enums;
 pub mod helpers;
 pub mod issue;
 pub mod jql;
+pub mod project;
 pub mod sprint;
 pub mod user;
 
