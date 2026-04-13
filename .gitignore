@@ -4,4 +4,5 @@ docs
 !.env.example
 .rules
 *.md
+!AGENTS.md
 !README.md
