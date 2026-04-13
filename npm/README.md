@@ -4,10 +4,11 @@ A Model Context Protocol (MCP) server for Jira Cloud, built with Rust. This serv
 
 ## Features
 
-- 🚀 **Full Jira API Support**: Management of Issues, Sprints, Boards, and Backlog.
-- 🧠 **Smart Context**: Automatic conversion to Atlassian Document Format (ADF).
-- ⚡ **High Performance**: Extremely fast native Rust implementation.
+- 🚀 **Full Jira API Support**: Management of Projects, Issues, Sprints, Boards, and Backlog.
+- 🧠 **Smart Context & Instructions**: Automatic ADF conversion and hardcoded AI directives for zero-hallucination project metadata validation.
+- ⚡ **High Performance & Caching**: Fast native Rust implementation with thread-safe in-memory caching for Issue Types and Custom Fields.
 - 🔍 **Field Filtering**: Reduces token usage (70-90%) via smart filters (`minimal`, `basic`, `standard`, `detailed`).
+- 🌐 **Universal AI Compatibility**: Native JSON schema sanitization ensures seamless integration with Claude, OpenAI, and Gemini.
 - 🎯 **Automatic Detection**: Identifies custom fields like "Story Points" without manual configuration.
 
 ## Installation
@@ -59,7 +60,7 @@ Add this to your `claude_desktop_config.json` file:
 }
 ```
 
-## Available Tools (21)
+## Available Tools (23)
 
 ### 🎫 Issue Management
 
@@ -99,11 +100,23 @@ Add this to your `claude_desktop_config.json` file:
 
 ### 🔍 Discovery
 
-| Tool          | Description                                                  |
-| ------------- | ------------------------------------------------------------ |
-| `fields_list` | Discovers available fields and their IDs for use in filters. |
+| Tool                   | Description                                                                              |
+| ---------------------- | ---------------------------------------------------------------------------------------- |
+| `fields_list`          | Discovers available fields and their IDs for use in filters.                             |
+| `project_search`       | Returns a paginated list of projects visible to the user. Matches by project name or key.|
+| `project_get_metadata` | Returns available Issue Types (Story, Bug, Epic) and their specific fields for a project.|
 
 ## Usage Examples
+
+### Discover project metadata before creating issues
+
+To avoid hallucinations and ensure you are using the correct `issueType` names (e.g., "Story", "Bug") and required fields for a specific project, use `project_get_metadata` first:
+
+```json
+{
+  "projectKey": "PROJ"
+}
+```
 
 ### Retrieve an issue while saving tokens
 
