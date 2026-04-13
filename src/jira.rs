@@ -3,7 +3,6 @@ use reqwest::header::CONTENT_TYPE;
 use rmcp::{
     ServerHandler,
     handler::server::{tool::ToolRouter, wrapper},
-    model::{ServerCapabilities, ServerInfo},
     tool_handler, tool_router,
 };
 use std::collections::HashMap;
@@ -15,6 +14,8 @@ pub struct Jira {
     workspace: String,
     username: String,
     password: String,
+    field_cache: tokio::sync::RwLock<std::collections::HashMap<String, String>>,
+    issue_type_cache: tokio::sync::RwLock<std::collections::HashMap<String, (String, bool)>>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -25,15 +26,55 @@ pub enum Method {
     Delete,
 }
 
+
+fn sanitize_schema_map(map: &mut serde_json::Map<String, serde_json::Value>) {
+    if let Some(type_val) = map.get("type") {
+        if let serde_json::Value::Array(arr) = type_val {
+            let mut non_null_type = None;
+            let mut has_null = false;
+            for v in arr {
+                if v == "null" {
+                    has_null = true;
+                } else {
+                    non_null_type = Some(v.clone());
+                }
+            }
+            if let Some(t) = non_null_type {
+                map.insert("type".to_string(), t);
+                if has_null {
+                    map.insert("nullable".to_string(), serde_json::Value::Bool(true));
+                }
+            }
+        }
+    }
+
+    for (_, v) in map.iter_mut() {
+        sanitize_schema_val(v);
+    }
+}
+
+fn sanitize_schema_val(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => sanitize_schema_map(map),
+        serde_json::Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                sanitize_schema_val(v);
+            }
+        }
+        _ => {}
+    }
+}
+
 #[tool_router]
 impl Jira {
     pub fn new(workspace: &str, username: &str, password: &str) -> Self {
         let mut tool_router = Self::tool_router();
 
-        // Remove $schema to ensure compatibility with Gemini
+        // Remove $schema and sanitize arrays in `type` to ensure compatibility with Gemini
         for (_, route) in tool_router.map.iter_mut() {
             let map = std::sync::Arc::make_mut(&mut route.attr.input_schema);
             map.remove("$schema");
+            sanitize_schema_map(map);
         }
 
         Self {
@@ -42,6 +83,8 @@ impl Jira {
             workspace: workspace.to_string(),
             username: username.to_string(),
             password: password.to_string(),
+            field_cache: tokio::sync::RwLock::new(std::collections::HashMap::new()),
+            issue_type_cache: tokio::sync::RwLock::new(std::collections::HashMap::new()),
         }
     }
 
@@ -105,22 +148,34 @@ impl Jira {
     }
 
     async fn find_field_id(&self, name: &str) -> Option<String> {
+        {
+            let cache = self.field_cache.read().await;
+            if let Some(id) = cache.get(&name.to_lowercase()) {
+                return Some(id.clone());
+            }
+        }
+
         let url = "/rest/api/3/field";
         let fields: Vec<serde_json::Value> = self
             .send_request::<Vec<serde_json::Value>, ()>(url, Method::Get, None, None::<&()>)
             .await
             .ok()?;
+
+        let mut target_id = None;
+        let mut cache = self.field_cache.write().await;
+
         for field in fields {
-            if let Some(field_name) = field.get("name").and_then(|n| n.as_str()) {
+            if let (Some(field_name), Some(field_id)) = (
+                field.get("name").and_then(|n| n.as_str()),
+                field.get("id").and_then(|id| id.as_str())
+            ) {
+                cache.insert(field_name.to_lowercase(), field_id.to_string());
                 if field_name.eq_ignore_ascii_case(name) {
-                    return field
-                        .get("id")
-                        .and_then(|id| id.as_str())
-                        .map(|s| s.to_string());
+                    target_id = Some(field_id.to_string());
                 }
             }
         }
-        None
+        target_id
     }
 
     async fn get_editable_field_id(&self, issue_key: &str, possible_names: &[&str]) -> Option<String> {
@@ -149,6 +204,15 @@ impl Jira {
         project_key: &str,
         issue_type: &str,
     ) -> Option<(String, bool)> {
+        let cache_key_prefix = format!("{}:", project_key.to_lowercase());
+        
+        {
+            let cache = self.issue_type_cache.read().await;
+            if let Some(res) = cache.get(&format!("{}{}", cache_key_prefix, issue_type.to_lowercase())) {
+                return Some(res.clone());
+            }
+        }
+
         let url = format!(
             "/rest/api/3/issue/createmeta?projectKeys={}&expand=projects.issuetypes",
             project_key
@@ -161,10 +225,12 @@ impl Jira {
         let projects = meta.get("projects")?.as_array()?;
         let project = projects
             .iter()
-            .find(|p| p.get("key").and_then(|k| k.as_str()).unwrap_or("") == project_key)?;
+            .find(|p| p.get("key").and_then(|k| k.as_str()).unwrap_or("").eq_ignore_ascii_case(project_key))?;
 
         let types = project.get("issuetypes")?.as_array()?;
-        let target = issue_type;
+        
+        let mut target_res = None;
+        let mut cache = self.issue_type_cache.write().await;
 
         for t in types {
             let name = t.get("name").and_then(|v| v.as_str()).unwrap_or("");
@@ -173,15 +239,19 @@ impl Jira {
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
             let id = t.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            let is_subtask = t.get("subtask").and_then(|v| v.as_bool()).unwrap_or(false);
 
-            // Match by ID, name, or untranslated name (homologs)
-            if id == target || name.eq_ignore_ascii_case(target) || untranslated.eq_ignore_ascii_case(target) {
-                let is_subtask = t.get("subtask").and_then(|v| v.as_bool()).unwrap_or(false);
-                return Some((id.to_string(), is_subtask));
+            let val = (id.to_string(), is_subtask);
+            cache.insert(format!("{}{}", cache_key_prefix, name.to_lowercase()), val.clone());
+            cache.insert(format!("{}{}", cache_key_prefix, untranslated.to_lowercase()), val.clone());
+            cache.insert(format!("{}{}", cache_key_prefix, id.to_lowercase()), val.clone());
+
+            if id == issue_type || name.eq_ignore_ascii_case(issue_type) || untranslated.eq_ignore_ascii_case(issue_type) {
+                target_res = Some(val.clone());
             }
         }
 
-        None
+        target_res
     }
 
     async fn find_transition_id(
@@ -1293,14 +1363,69 @@ impl Jira {
             Err(e) => e.to_string(),
         }
     }
-}
 
-#[tool_handler]
-impl ServerHandler for Jira {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
-            ..Default::default()
+    #[rmcp::tool(
+        name = "project_get_metadata",
+        description = "Returns metadata for a specific project, including available Issue Types (e.g. Story, Bug, Epic) and their fields."
+    )]
+    async fn project_get_metadata(
+        &self,
+        wrapper::Parameters(params): wrapper::Parameters<domains::project::ProjectGetMetadataArgs>,
+    ) -> String {
+        let url = format!("/rest/api/3/issue/createmeta?projectKeys={}&expand=projects.issuetypes.fields", params.project_key);
+        
+        match self
+            .send_request::<serde_json::Value, ()>(&url, Method::Get, None, None::<&()>)
+            .await
+        {
+            Ok(res) => serde_json::to_string(&res).unwrap_or_default(),
+            Err(e) => format!(r#"{{"error": "Failed to fetch metadata for project {}: {}"}}"#, params.project_key, e),
         }
     }
+
+
+    #[rmcp::tool(
+        name = "project_search",
+        description = "Returns a paginated list of projects visible to the user. Matches by project name or key."
+    )]
+    async fn project_search(
+        &self,
+        wrapper::Parameters(params): wrapper::Parameters<domains::project::ProjectSearchArgs>,
+    ) -> String {
+        let url = "/rest/api/3/project/search";
+        let mut query = Vec::new();
+
+        if let Some(start_at) = params.start_at {
+            query.push(("startAt", start_at.to_string()));
+        }
+        if let Some(max_results) = params.max_results {
+            query.push(("maxResults", max_results.to_string()));
+        }
+        if let Some(q) = params.query {
+            query.push(("query", q));
+        }
+        if let Some(statuses) = params.status {
+            for status in statuses {
+                query.push(("status", status));
+            }
+        }
+
+        let query_ref: Vec<(&str, String)> = query.iter().map(|(k, v)| (*k, v.clone())).collect();
+        let query_param = if query_ref.is_empty() { None } else { Some(&query_ref) };
+
+        match self
+            .send_request::<serde_json::Value, ()>(url, Method::Get, query_param, None::<&()>)
+            .await
+        {
+            Ok(res) => serde_json::to_string(&res).unwrap_or_default(),
+            Err(e) => format!(r#"{{"error": "Failed to search projects: {}"}}"#, e),
+        }
+    }
+
 }
+
+#[tool_handler(
+    router = self.tool_router,
+    instructions = "You are interacting with Jira via the MCP server.\n\nIMPORTANT GUIDELINES:\n1. ALWAYS use `project_get_metadata` to verify exact issue types (e.g., 'Story', 'Epic') and fields available for a project BEFORE creating an issue.\n2. Never guess custom field IDs. They vary by workspace.\n3. For Story Points, either use `issue_set_story_points` directly, or if manual mapping is needed, find the exact custom field ID."
+)]
+impl ServerHandler for Jira {}
